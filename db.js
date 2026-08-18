@@ -11,4 +11,4 @@ const supabase = createClient(
 );
 
 // 4. Export it so server.js can reuse this same connection
-module.exports = supabase;
+module.exports = supabase;         
