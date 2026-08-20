@@ -2,29 +2,33 @@ const WebSocket = require('ws');
 const supabase = require('./db');
 
 const wss = new WebSocket.Server({ port: 8080 });
-
 const clients = new Map();
 
 wss.on('connection', (socket) => {
   console.log('✅ New client connected (not yet authenticated)');
 
   socket.on('message', async (data) => {
-    const message = data.toString();
+    // 1. Parse the raw text as JSON instead of splitting it by hand.
+    //    Wrapped in try/catch because JSON.parse throws on anything malformed —
+    //    without this, one bad message from a client would crash the server.
+    let msg;
+    try {
+      msg = JSON.parse(data.toString());
+    } catch (err) {
+      socket.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+      return;
+    }
 
-    if (!socket.name) {
-      const token = message;
-
-      const { data: userData, error } = await supabase.auth.getUser(token);
+    // 2. Branch on the envelope's `type` field instead of guessing from string shape
+    if (msg.type === 'auth') {
+      const { data: userData, error } = await supabase.auth.getUser(msg.token);
 
       if (error || !userData.user) {
-        console.log('❌ Invalid token — rejecting connection');
-        socket.send('❌ Authentication failed');
+        socket.send(JSON.stringify({ type: 'auth_error', message: 'Invalid token' }));
         socket.close();
         return;
       }
 
-      // 1. Token only proves WHO they are (their auth id) — it doesn't carry their
-      //    chosen username, so we look that up from the linked profiles table
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('username')
@@ -32,17 +36,18 @@ wss.on('connection', (socket) => {
         .single();
 
       if (profileError || !profile) {
-        console.log('❌ No profile found for this account');
-        socket.send('❌ No profile found — please sign up again');
+        socket.send(JSON.stringify({ type: 'auth_error', message: 'No profile found' }));
         socket.close();
         return;
       }
 
-      // 2. From here on, identity = verified username, not email — this is what
-      //    people will now type when addressing a message (shorter, no @domain.com)
       socket.name = profile.username;
       clients.set(socket.name, socket);
       console.log(`👤 Authenticated as: ${socket.name}`);
+
+      // 3. Every response is now a structured, labeled object too —
+      //    the client always knows what kind of thing it just received
+      socket.send(JSON.stringify({ type: 'auth_success', username: socket.name }));
 
       const { data: history, error: historyError } = await supabase
         .from('messages')
@@ -50,41 +55,54 @@ wss.on('connection', (socket) => {
         .eq('receiver_username', socket.name)
         .order('created_at', { ascending: true });
 
-      if (historyError) {
-        console.log('⚠️  Error fetching history:', historyError.message);
-      } else if (history.length > 0) {
-        console.log(`📜 Sending ${history.length} past message(s) to ${socket.name}`);
-        history.forEach((msg) => {
-          socket.send(`[history] ${msg.sender_username}: ${msg.content}`);
-        });
+      if (!historyError && history.length > 0) {
+        socket.send(JSON.stringify({
+          type: 'history',
+          messages: history.map((m) => ({
+            from: m.sender_username,
+            content: m.content,
+            timestamp: m.created_at,
+          })),
+        }));
+        console.log(`📜 Sent ${history.length} past message(s) to ${socket.name}`);
       }
       return;
     }
 
-    if (message.startsWith('TO:')) {
-      const [, targetUsername, ...rest] = message.split(':');
-      const text = rest.join(':');
+    // 4. Guard: reject anything else until this connection has authenticated
+    if (!socket.name) {
+      socket.send(JSON.stringify({ type: 'error', message: 'Not authenticated yet' }));
+      return;
+    }
+
+    if (msg.type === 'message') {
+      // 5. Fields are read by NAME now (msg.to, msg.content) — not by string position
+      const { to, content } = msg;
 
       const { error } = await supabase
         .from('messages')
-        .insert({ sender_username: socket.name, receiver_username: targetUsername, content: text });
+        .insert({ sender_username: socket.name, receiver_username: to, content });
 
       if (error) {
         console.log('⚠️  Error saving message:', error.message);
       } else {
-        console.log(`💾 Saved message from ${socket.name} to ${targetUsername}`);
+        console.log(`💾 Saved message from ${socket.name} to ${to}`);
       }
 
-      const targetSocket = clients.get(targetUsername);
+      const targetSocket = clients.get(to);
 
       if (targetSocket) {
-        targetSocket.send(`${socket.name}: ${text}`);
-        console.log(`➡️  Routed message from ${socket.name} to ${targetUsername}`);
+        targetSocket.send(JSON.stringify({ type: 'message', from: socket.name, content }));
+        console.log(`➡️  Routed message from ${socket.name} to ${to}`);
       } else {
-        console.log(`⚠️  ${targetUsername} is not connected — message saved for later`);
-        socket.send(`⚠️ ${targetUsername} is not online, but your message was saved`);
+        console.log(`⚠️  ${to} is not connected — message saved for later`);
+        socket.send(JSON.stringify({ type: 'error', message: `${to} is not online, message saved` }));
       }
+      return;
     }
+
+    // 6. Unknown type — structured rejection instead of silent failure
+    socket.send(JSON.stringify({ type: 'error', message: `Unknown message type: ${msg.type}` }));
   });
 
   socket.on('close', () => {
