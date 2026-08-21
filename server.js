@@ -49,17 +49,19 @@ wss.on('connection', (socket) => {
       //    the client always knows what kind of thing it just received
       socket.send(JSON.stringify({ type: 'auth_success', username: socket.name }));
 
+      // --- In server.js ---
       const { data: history, error: historyError } = await supabase
         .from('messages')
-        .select('sender_username, content, created_at')
-        .eq('receiver_username', socket.name)
+        .select('sender_username, receiver_username, content, created_at')
+        .or(`sender_username.eq.${socket.name},receiver_username.eq.${socket.name}`)
         .order('created_at', { ascending: true });
 
-      if (!historyError && history.length > 0) {
+      if (!historyError && history && history.length > 0) {
         socket.send(JSON.stringify({
           type: 'history',
           messages: history.map((m) => ({
             from: m.sender_username,
+            to: m.receiver_username,
             content: m.content,
             timestamp: m.created_at,
           })),
