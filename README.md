@@ -1,10 +1,26 @@
+
+# Run and deploy your AI Studio app
+
+This contains everything you need to run your app locally.
+
+View your app in AI Studio: https://ai.studio/apps/c12f6648-4738-43ea-895c-fae4b3313dc8
+
+## Run Locally
+
+**Prerequisites:**  Node.js
+
+
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`
+=======
 # Real-Time Chat Backend — Project Overview
 
-This document explains what this project is, how it was built (in the order it was actually built) — from a print-only WebSocket server, through message routing, persistence, authentication, and eventually a structured message protocol — the core concepts behind every decision, and the specific problems that came up along the way and how they were solved. It's written so that someone with no prior background could read it and understand *why* a chat backend is built the way it is — not just *that* it works.
+This document explains what this project is, how it was built (in the order it was actually built), the core concepts behind every decision, and the specific problems that came up along the way and how they were solved. It's written so that someone with no prior background could read it and understand *why* a chat backend is built the way it is — not just *that* it works.
 
 This chat system is being built as the messaging layer for a larger university interest-matching app — the goal there is to match students by shared interests instead of random browsing, and this backend handles the actual conversations between matched users once they're connected.
-
-> **Manual step required (Layer 7):** the project now uses two separate database keys instead of one — the existing public key, and a new, far more privileged **service role** key that only the server should ever hold. This second key has to be copied by hand from the project's dashboard (Settings → API → the "service_role" secret) into the environment file, since it's sensitive enough that it isn't retrieved automatically. It must never be shared with, or embedded in, anything a real client (like a browser) would run.
 
 ---
 
@@ -74,38 +90,6 @@ However, that internal table only knows about login credentials — it has no co
 
 This layer also replaced typed email addresses with a **chosen username** for addressing messages — shorter and more natural than a full email, while still being tied back to a verified, authenticated identity underneath.
 
-### Layer 6 — Protocol cleanliness: moving from raw text to structured JSON
-
-Every layer up to this point used a testing shortcut inherited from the very first version: messages were plain text, and the server figured out what a message *meant* by inspecting its shape — for example, treating anything starting with `"TO:"` as "send this to someone," and splitting the rest by colons to find the recipient and the text. This worked, but it was fragile in a way that would only get worse: it had no way to represent more than one kind of message, it broke if a message's own content happened to contain a colon, and it gave a real client (a browser or app) nothing consistent to parse.
-
-The fix was adopting what's often called an **envelope pattern**: every message, in both directions, is now a structured object with one field — `type` — that always says what *kind* of message it is, plus whatever other fields that kind needs. For example, a login carries `{ type: "auth", token: ... }`, while a chat message carries `{ type: "message", to: ..., content: ... }`. This is written using **JSON (JavaScript Object Notation)**, a data format built into essentially every programming language, where data is represented as clearly labeled key-value pairs rather than a raw string that has to be manually pulled apart.
-
-This single change solved several problems at once:
-
-- **Fields are read by name, not by position.** There's no more risk of a message's own content accidentally being mistaken for part of the structure around it.
-- **The protocol became self-describing.** Both the server and any future client can check `type` first and know exactly which fields to expect next, instead of guessing from string prefixes.
-- **It's extensible without breaking anything already built.** Adding a future capability — like a typing indicator or a read receipt — just means introducing a new `type` value. Existing message types don't need to change at all, which is the core property that makes a protocol scale as an app grows.
-- **Responses became structured too, not just requests.** Every reply the server sends back — a successful login, an error, message history, a delivered message — is now a labeled object as well, so a client always knows what kind of thing it just received rather than having to infer it.
-
-This was a purely application-layer change — nothing about the database, authentication, or how connections are tracked needed to change alongside it.
-
-### Layer 7 — Closing the public database exposure
-
-Every table created so far used permissive security rules — anyone, authenticated or not, could read or write anything — as a deliberate shortcut to keep testing simple. This layer closed that gap before it could become a real problem.
-
-**Why this mattered at all.** The hosted database automatically exposes every table as a public API, and the key used to reach that API is *not a secret* — it's designed to be embedded directly in a browser's visible source code once a real client exists. In other words, security was never supposed to come from hiding that key; it was always supposed to come from the access rules attached to each table. With the old permissive rules, the moment a real client existed, anyone could take that same public key straight out of the page source, skip the server entirely, and query the database directly — reading every private conversation between every user, or writing messages pretending to be someone else. The server's own logic (only fetch *your* history, only send *your* messages) meant nothing to a request that never went through the server in the first place.
-
-**What changed, table by table:**
-
-- **Messages** — all direct access was removed entirely. There are no rules left that allow an outside request, authenticated or not, to read or write a single row. From now on, this table is reachable only by the server itself.
-- **Profiles** — narrowed rather than fully closed, since a person still needs to be able to check "is this username available" before their account even exists, and other people still need to be able to look someone up by username to message them. What *did* tighten: creating a profile now requires the request's own verified identity to match the profile being created — nobody can create or overwrite a profile belonging to someone else.
-
-**How the server keeps working despite messages being fully locked down.** The server itself now connects to the database using a separate, far more privileged key — a **service role** connection, which is trusted completely and bypasses table security rules altogether. This is a deliberate trade of *where* the trust lives: rather than relying on database-level rules to decide who can touch messages, the server itself becomes the sole gatekeeper, since it already verifies every user's identity via their token before it ever touches the database on their behalf. This key is powerful enough that it must never be given to a client or exposed publicly — it stays on the server only.
-
-This also meant separating, for the first time, *two different kinds of database connection* that had previously been the same one: the server's own trusted connection, and the connection a real end-user client would use (the ordinary public key, still used by the sign-up/login step, since that step is standing in for what a real client would do).
-
-**A known, deliberate trade-off.** Usernames remain publicly readable by design, since addressing someone by username and checking availability both require it. This is a narrower exposure than before — it does not expose message content — but it's worth naming honestly rather than glossing over: it's a considered trade-off, not an oversight, and could be tightened further later (for example, by only exposing usernames through a narrower view) if needed.
-
 ---
 
 ## 3. Problems Encountered Along the Way
@@ -141,11 +125,12 @@ At this point, the system has all three foundational pillars of a working chat b
 - **Real-time delivery** — messages sent by one connected client are routed live to another connected client through the server.
 - **Persistence** — every message is saved to the database regardless of whether the recipient is online, and offline recipients receive their missed messages automatically the next time they connect.
 - **Verified identity** — every participant's identity is confirmed through a signed authentication token rather than trusted at face value, and is linked to a proper profile record with a unique chosen username.
-- **A structured protocol** — every message exchanged in either direction is a labeled JSON object rather than a hand-parsed string, giving the system a consistent, extensible foundation to build new message types on top of.
-- **Closed public database exposure** — the database is no longer directly reachable by an outside request for anything sensitive; the server itself is now the sole trusted gatekeeper to conversation data.
 
 ## 5. What's Still Left to Do
 
+- **Tighten database security policies** — the current rules are intentionally permissive (allowing broad read/write access) to make testing easier. Before this is used by real people, these need to be narrowed — for example, so a person can only read messages where they are the sender or the receiver.
+- **Move from a plain-text testing protocol to a structured message format** — the current "type this exact pattern of text" approach was a deliberate shortcut for testing through a terminal, and will need to become a proper structured format before a real client application is built on top of it.
 - **Build an actual client** — everything so far has been tested through a raw terminal connection standing in for a real app. No browser page or app interface exists yet.
 - **Handle real-world edge cases** — such as the same person being connected from two devices at once, reconnecting gracefully after a dropped connection, and optional features like delivered/read receipts or typing indicators.
 - **The interest-matching feature itself** — this entire project so far is the messaging *infrastructure*; the actual feature of matching university students by shared interests has not been started yet and sits on top of this foundation.
+>>>>>>> 342aa1bcac499afbb9f3a3ae1bea5b29d0c71279
