@@ -1,6 +1,6 @@
 require('dotenv').config();
 const readline = require('readline');
-const supabase = require('./db');
+const supabase = require('./publicClient');
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 

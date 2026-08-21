@@ -4,6 +4,8 @@ This document explains what this project is, how it was built (in the order it w
 
 This chat system is being built as the messaging layer for a larger university interest-matching app — the goal there is to match students by shared interests instead of random browsing, and this backend handles the actual conversations between matched users once they're connected.
 
+> **Manual step required (Layer 7):** the project now uses two separate database keys instead of one — the existing public key, and a new, far more privileged **service role** key that only the server should ever hold. This second key has to be copied by hand from the project's dashboard (Settings → API → the "service_role" secret) into the environment file, since it's sensitive enough that it isn't retrieved automatically. It must never be shared with, or embedded in, anything a real client (like a browser) would run.
+
 ---
 
 ## 1. The Big Picture First
@@ -87,6 +89,23 @@ This single change solved several problems at once:
 
 This was a purely application-layer change — nothing about the database, authentication, or how connections are tracked needed to change alongside it.
 
+### Layer 7 — Closing the public database exposure
+
+Every table created so far used permissive security rules — anyone, authenticated or not, could read or write anything — as a deliberate shortcut to keep testing simple. This layer closed that gap before it could become a real problem.
+
+**Why this mattered at all.** The hosted database automatically exposes every table as a public API, and the key used to reach that API is *not a secret* — it's designed to be embedded directly in a browser's visible source code once a real client exists. In other words, security was never supposed to come from hiding that key; it was always supposed to come from the access rules attached to each table. With the old permissive rules, the moment a real client existed, anyone could take that same public key straight out of the page source, skip the server entirely, and query the database directly — reading every private conversation between every user, or writing messages pretending to be someone else. The server's own logic (only fetch *your* history, only send *your* messages) meant nothing to a request that never went through the server in the first place.
+
+**What changed, table by table:**
+
+- **Messages** — all direct access was removed entirely. There are no rules left that allow an outside request, authenticated or not, to read or write a single row. From now on, this table is reachable only by the server itself.
+- **Profiles** — narrowed rather than fully closed, since a person still needs to be able to check "is this username available" before their account even exists, and other people still need to be able to look someone up by username to message them. What *did* tighten: creating a profile now requires the request's own verified identity to match the profile being created — nobody can create or overwrite a profile belonging to someone else.
+
+**How the server keeps working despite messages being fully locked down.** The server itself now connects to the database using a separate, far more privileged key — a **service role** connection, which is trusted completely and bypasses table security rules altogether. This is a deliberate trade of *where* the trust lives: rather than relying on database-level rules to decide who can touch messages, the server itself becomes the sole gatekeeper, since it already verifies every user's identity via their token before it ever touches the database on their behalf. This key is powerful enough that it must never be given to a client or exposed publicly — it stays on the server only.
+
+This also meant separating, for the first time, *two different kinds of database connection* that had previously been the same one: the server's own trusted connection, and the connection a real end-user client would use (the ordinary public key, still used by the sign-up/login step, since that step is standing in for what a real client would do).
+
+**A known, deliberate trade-off.** Usernames remain publicly readable by design, since addressing someone by username and checking availability both require it. This is a narrower exposure than before — it does not expose message content — but it's worth naming honestly rather than glossing over: it's a considered trade-off, not an oversight, and could be tightened further later (for example, by only exposing usernames through a narrower view) if needed.
+
 ---
 
 ## 3. Problems Encountered Along the Way
@@ -123,10 +142,10 @@ At this point, the system has all three foundational pillars of a working chat b
 - **Persistence** — every message is saved to the database regardless of whether the recipient is online, and offline recipients receive their missed messages automatically the next time they connect.
 - **Verified identity** — every participant's identity is confirmed through a signed authentication token rather than trusted at face value, and is linked to a proper profile record with a unique chosen username.
 - **A structured protocol** — every message exchanged in either direction is a labeled JSON object rather than a hand-parsed string, giving the system a consistent, extensible foundation to build new message types on top of.
+- **Closed public database exposure** — the database is no longer directly reachable by an outside request for anything sensitive; the server itself is now the sole trusted gatekeeper to conversation data.
 
 ## 5. What's Still Left to Do
 
-- **Tighten database security policies** — the current rules are intentionally permissive (allowing broad read/write access) to make testing easier. Before this is used by real people, these need to be narrowed — for example, so a person can only read messages where they are the sender or the receiver.
 - **Build an actual client** — everything so far has been tested through a raw terminal connection standing in for a real app. No browser page or app interface exists yet.
 - **Handle real-world edge cases** — such as the same person being connected from two devices at once, reconnecting gracefully after a dropped connection, and optional features like delivered/read receipts or typing indicators.
 - **The interest-matching feature itself** — this entire project so far is the messaging *infrastructure*; the actual feature of matching university students by shared interests has not been started yet and sits on top of this foundation.
