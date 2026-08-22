@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useWebSocket } from '../context/WebSocketContext';
 import { Phone, Video, Info, Mic, Send, Search } from 'lucide-react';
 

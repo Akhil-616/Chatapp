@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { X, Mail, Lock, User, AtSign, ArrowRight } from 'lucide-react';
 
@@ -76,43 +76,44 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'login', onAu
         throw new Error('That username is already taken. Please choose another.');
       }
 
-      // 2. Perform Supabase Auth Sign Up
+      // 2. Perform Supabase Auth Sign Up with metadata for the DB trigger
+      const cleanUsername = username.trim().toLowerCase();
+      const cleanFullName = fullName.trim();
+
       const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
+        email: email.trim(),
         password,
         options: {
           data: {
-            full_name: fullName,
-            username: username.trim().toLowerCase(),
+            full_name: cleanFullName,
+            username: cleanUsername,
           },
         },
       });
 
       if (authError) throw authError;
 
-      // 3. Create the row in the linked 'profiles' table if session/user is returned
-      if (authData.user) {
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-            id: authData.user.id,
-            email: authData.user.email,
-            username: username.trim().toLowerCase(),
-            full_name: fullName || null,
-          });
-
-        if (profileError) {
-          // If RLS blocked it or already exists, log it
-          console.warn('Profile row creation note:', profileError.message);
+      // 3. If an active session was returned (email confirmation off or instant login),
+      // ensure the profile row is synced as a fallback to the server trigger
+      if (authData.session && authData.user) {
+        try {
+          await supabase
+            .from('profiles')
+            .upsert({
+              id: authData.user.id,
+              email: authData.user.email,
+              username: cleanUsername,
+              full_name: cleanFullName || null,
+            }, { onConflict: 'id' });
+        } catch (syncErr) {
+          console.log('Database trigger handled profile creation:', syncErr);
         }
-      }
 
-      // If email verification is enabled, session won't be active immediately
-      if (authData.user && !authData.session) {
-        setInfoMsg('Verification email sent! Please check your inbox and confirm your email before logging in.');
-      } else if (authData.session) {
         onAuthSuccess(authData.session);
         onClose();
+      } else if (authData.user && !authData.session) {
+        // Email confirmation is ON — user is created in auth.users, DB trigger creates profile row
+        setInfoMsg('Account created! A confirmation link has been sent to your email. Please verify your email before logging in.');
       }
     } catch (err) {
       setErrorMsg(err.message || 'Failed to sign up');

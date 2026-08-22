@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabaseClient';
 
 const WebSocketContext = createContext(null);
@@ -6,11 +6,11 @@ const WebSocketContext = createContext(null);
 export const WebSocketProvider = ({ children, session, username }) => {
   const [messages, setMessages] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
-  const [onlineUsers, setOnlineUsers] = useState(new Set());
   const socketRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const connectWebSocketRef = useRef(null);
 
-  const connectWebSocket = () => {
+  const connectWebSocket = useCallback(() => {
     if (!session?.access_token || !username) return;
 
     // Use ws:// for local dev, wss:// for production
@@ -54,6 +54,7 @@ export const WebSocketProvider = ({ children, session, username }) => {
             ]);
             break;
 
+          case 'notice':
           case 'error':
             console.warn('⚠️ Server notice:', data.message);
             break;
@@ -72,8 +73,8 @@ export const WebSocketProvider = ({ children, session, username }) => {
       // Auto-reconnect with fresh access token
       reconnectTimeoutRef.current = setTimeout(async () => {
         const { data } = await supabase.auth.getSession();
-        if (data.session) {
-          connectWebSocket();
+        if (data.session && connectWebSocketRef.current) {
+          connectWebSocketRef.current();
         }
       }, 3000);
     };
@@ -82,7 +83,11 @@ export const WebSocketProvider = ({ children, session, username }) => {
       console.error('WebSocket Error:', err);
       ws.close();
     };
-  };
+  }, [session, username]);
+
+  useEffect(() => {
+    connectWebSocketRef.current = connectWebSocket;
+  }, [connectWebSocket]);
 
   useEffect(() => {
     if (session && username) {
@@ -95,7 +100,7 @@ export const WebSocketProvider = ({ children, session, username }) => {
         socketRef.current.close();
       }
     };
-  }, [session, username]);
+  }, [session, username, connectWebSocket]);
 
   const sendMessage = (toUsername, content) => {
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
@@ -131,7 +136,6 @@ export const WebSocketProvider = ({ children, session, username }) => {
         messages,
         sendMessage,
         isConnected,
-        onlineUsers,
       }}
     >
       {children}
@@ -139,4 +143,6 @@ export const WebSocketProvider = ({ children, session, username }) => {
   );
 };
 
+// Hook to access WebSocket context
+// eslint-disable-next-line react-refresh/only-export-components
 export const useWebSocket = () => useContext(WebSocketContext);

@@ -1,4 +1,3 @@
-import React from 'react';
 import { User, Sparkles, Heart, Shield } from 'lucide-react';
 
 export default function NotificationsView() {

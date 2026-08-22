@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from './lib/supabaseClient';
 import AuthModal from './components/AuthModal';
 import Sidebar from './components/Sidebar';
@@ -23,7 +23,7 @@ export default function App() {
       console.log('🔍 Fetching profile for user ID:', userId);
       const { data, error } = await supabase
         .from('profiles')
-        .select('username')
+        .select('id, username, full_name, email')
         .eq('id', userId)
         .maybeSingle();
 
@@ -32,17 +32,17 @@ export default function App() {
       }
 
       if (data && data.username) {
-        console.log('👤 Profile found:', data.username);
+        console.log('👤 Profile found:', data.username, data.full_name);
         setUserProfile(data);
       } else {
         // Fallback: derive username from email if profile row is missing
         const fallbackUsername = userEmail ? userEmail.split('@')[0] : 'student';
         console.log('ℹ️ Using fallback username:', fallbackUsername);
-        setUserProfile({ username: fallbackUsername });
+        setUserProfile({ id: userId, username: fallbackUsername, email: userEmail, full_name: '' });
       }
     } catch (err) {
       console.error('Profile fetch error:', err);
-      setUserProfile({ username: userEmail ? userEmail.split('@')[0] : 'student' });
+      setUserProfile({ id: userId, username: userEmail ? userEmail.split('@')[0] : 'student', email: userEmail, full_name: '' });
     } finally {
       setLoading(false);
     }
@@ -129,6 +129,7 @@ export default function App() {
                 userProfile={userProfile}
                 email={session.user.email}
                 onLogout={handleLogout}
+                onProfileUpdate={(updated) => setUserProfile((prev) => ({ ...prev, ...updated }))}
               />
             )}
 

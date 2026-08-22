@@ -21,40 +21,53 @@ wss.on('connection', (socket) => {
 
     // 2. Branch on the envelope's `type` field instead of guessing from string shape
     if (msg.type === 'auth') {
+      if (!msg.token || typeof msg.token !== 'string') {
+        socket.send(JSON.stringify({ type: 'auth_error', message: 'Missing or invalid token format' }));
+        socket.close();
+        return;
+      }
+
       const { data: userData, error } = await supabase.auth.getUser(msg.token);
 
       if (error || !userData.user) {
-        socket.send(JSON.stringify({ type: 'auth_error', message: 'Invalid token' }));
+        socket.send(JSON.stringify({ type: 'auth_error', message: 'Invalid or expired token' }));
         socket.close();
         return;
       }
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('username')
+        .select('id, username, full_name')
         .eq('id', userData.user.id)
-        .single();
+        .maybeSingle();
 
-      if (profileError || !profile) {
+      if (profileError || !profile || !profile.username) {
         socket.send(JSON.stringify({ type: 'auth_error', message: 'No profile found' }));
         socket.close();
         return;
       }
 
+      socket.userId = userData.user.id;
       socket.name = profile.username;
+      socket.fullName = profile.full_name || '';
       clients.set(socket.name, socket);
-      console.log(`👤 Authenticated as: ${socket.name}`);
+      console.log(`👤 Authenticated as: ${socket.name} (${socket.fullName || 'No full name'})`);
 
-      // 3. Every response is now a structured, labeled object too —
-      //    the client always knows what kind of thing it just received
-      socket.send(JSON.stringify({ type: 'auth_success', username: socket.name }));
+      // 3. Structured auth success response
+      socket.send(JSON.stringify({
+        type: 'auth_success',
+        username: socket.name,
+        full_name: socket.fullName,
+      }));
 
-      // --- In server.js ---
+      // --- Past message history with safe matching ---
+      const safeUsername = socket.name.replace(/[^a-zA-Z0-9_-]/g, '');
       const { data: history, error: historyError } = await supabase
         .from('messages')
         .select('sender_username, receiver_username, content, created_at')
-        .or(`sender_username.eq.${socket.name},receiver_username.eq.${socket.name}`)
-        .order('created_at', { ascending: true });
+        .or(`sender_username.eq.${safeUsername},receiver_username.eq.${safeUsername}`)
+        .order('created_at', { ascending: true })
+        .limit(100);
 
       if (!historyError && history && history.length > 0) {
         socket.send(JSON.stringify({
@@ -78,37 +91,61 @@ wss.on('connection', (socket) => {
     }
 
     if (msg.type === 'message') {
-      // 5. Fields are read by NAME now (msg.to, msg.content) — not by string position
+      // 5. Input validation on payload fields
       const { to, content } = msg;
+
+      if (!to || typeof to !== 'string' || !to.trim()) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Invalid recipient' }));
+        return;
+      }
+
+      if (!content || typeof content !== 'string' || !content.trim()) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Message content cannot be empty' }));
+        return;
+      }
+
+      if (content.length > 4000) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Message content exceeds length limit (4000 chars)' }));
+        return;
+      }
+
+      const cleanTo = to.trim().toLowerCase();
+      const cleanContent = content.trim();
 
       const { error } = await supabase
         .from('messages')
-        .insert({ sender_username: socket.name, receiver_username: to, content });
+        .insert({ sender_username: socket.name, receiver_username: cleanTo, content: cleanContent });
 
       if (error) {
         console.log('⚠️  Error saving message:', error.message);
       } else {
-        console.log(`💾 Saved message from ${socket.name} to ${to}`);
+        console.log(`💾 Saved message from ${socket.name} to ${cleanTo}`);
       }
 
-      const targetSocket = clients.get(to);
+      const targetSocket = clients.get(cleanTo);
 
-      if (targetSocket) {
-        targetSocket.send(JSON.stringify({ type: 'message', from: socket.name, content }));
-        console.log(`➡️  Routed message from ${socket.name} to ${to}`);
+      if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
+        targetSocket.send(JSON.stringify({
+          type: 'message',
+          from: socket.name,
+          to: cleanTo,
+          content: cleanContent,
+        }));
+        console.log(`➡️  Routed message from ${socket.name} to ${cleanTo}`);
       } else {
-        console.log(`⚠️  ${to} is not connected — message saved for later`);
-        socket.send(JSON.stringify({ type: 'error', message: `${to} is not online, message saved` }));
+        console.log(`⚠️  ${cleanTo} is not connected — message saved for later`);
+        socket.send(JSON.stringify({ type: 'notice', message: `${cleanTo} is not online, message saved` }));
       }
       return;
     }
 
-    // 6. Unknown type — structured rejection instead of silent failure
+    // 6. Unknown type — structured rejection
     socket.send(JSON.stringify({ type: 'error', message: `Unknown message type: ${msg.type}` }));
   });
 
   socket.on('close', () => {
-    if (socket.name) {
+    // Only delete from clients map if this exact socket is the currently mapped one
+    if (socket.name && clients.get(socket.name) === socket) {
       clients.delete(socket.name);
       console.log(`❌ ${socket.name} disconnected`);
     }

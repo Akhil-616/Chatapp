@@ -24,12 +24,19 @@ async function main() {
     return;
   }
 
-  // 3. No account yet — this is a first-time signup, so we also need a username
+  // 3. No account yet — this is a first-time signup, so we also need a full name and username
   console.log('No existing account, creating one...');
+
+  const fullName = (await ask('Enter your full name: ')).trim();
 
   let username;
   while (true) {
-    username = await ask('Choose a username: ');
+    username = (await ask('Choose a username: ')).trim().toLowerCase();
+
+    if (!username) {
+      console.log('❌ Username cannot be empty.');
+      continue;
+    }
 
     // 4. Enforce uniqueness ourselves too (not just relying on the DB error),
     //    so the user gets a clean retry instead of a raw SQL error
@@ -46,7 +53,16 @@ async function main() {
     }
   }
 
-  ({ data, error } = await supabase.auth.signUp({ email, password }));
+  ({ data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        username,
+        full_name: fullName,
+      },
+    },
+  }));
 
   if (error) {
     console.log('❌ Signup failed:', error.message);
@@ -54,20 +70,29 @@ async function main() {
     return;
   }
 
-  // 5. Create the profile row that links this auth user to their chosen username
-  const { error: profileError } = await supabase
-    .from('profiles')
-    .insert({ id: data.user.id, email: data.user.email, username });
+  // 5. Create / sync the profile row (if DB trigger didn't already create it)
+  if (data.user && data.session) {
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .upsert({
+        id: data.user.id,
+        email: data.user.email,
+        username,
+        full_name: fullName || null,
+      }, { onConflict: 'id' });
 
-  if (profileError) {
-    console.log('❌ Could not create profile:', profileError.message);
-    rl.close();
-    return;
+    if (profileError) {
+      console.log('ℹ️  Profile note:', profileError.message);
+    }
   }
 
-  console.log('\n✅ Account created as:', username);
-  console.log('\nYour access token (paste as your first message in wscat):\n');
-  console.log(data.session.access_token);
+  console.log('\n✅ Account registered for:', fullName || username, `(@${username})`);
+  if (data.session?.access_token) {
+    console.log('\nYour access token (paste as your first message in wscat):\n');
+    console.log(data.session.access_token);
+  } else {
+    console.log('\n✉️ Verification email sent. Please confirm your email before connecting.');
+  }
   rl.close();
 }
 

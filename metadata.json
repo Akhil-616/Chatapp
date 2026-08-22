@@ -1,0 +1,6 @@
+{
+  "name": "Student Chat",
+  "description": "Real-time student chat and campus directory application with Supabase authentication and profile management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
