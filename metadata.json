@@ -1,6 +1,6 @@
 {
-  "name": "Student Chat",
-  "description": "Real-time student chat and campus directory application with Supabase authentication and profile management.",
+  "name": "ConnectJutti",
+  "description": "Campus circles, direct messages, and study threads platform for college students with real-time WebSocket messaging and Supabase authentication.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

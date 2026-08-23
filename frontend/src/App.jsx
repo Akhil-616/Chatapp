@@ -1,24 +1,37 @@
 import { useState, useEffect } from 'react';
-import { supabase } from './lib/supabaseClient';
+import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
 import AuthModal from './components/AuthModal';
 import Sidebar from './components/Sidebar';
 import MessagesView from './components/MessagesView';
 import DirectoryView from './components/DirectoryView';
 import NotificationsView from './components/NotificationsView';
 import ProfileView from './components/ProfileView';
+import FlowingParticlesCanvas from './components/FlowingParticlesCanvas';
+import MarqueeWordmark from './components/MarqueeWordmark';
+import RealtimeShowcaseSection from './components/RealtimeShowcaseSection';
+import CommunityIdeasBoard from './components/CommunityIdeasBoard';
+import CampusFooter from './components/CampusFooter';
 import { WebSocketProvider } from './context/WebSocketContext';
 import { Loader2 } from 'lucide-react';
+import './App.css';
 
 export default function App() {
   const [session, setSession] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(isSupabaseConfigured);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('login');
   const [activeTab, setActiveTab] = useState('messages');
   const [activeChatUser, setActiveChatUser] = useState(null);
 
   const fetchProfile = async (userId, userEmail) => {
+    if (!isSupabaseConfigured) {
+      const fallbackUsername = userEmail ? userEmail.split('@')[0] : 'student';
+      setUserProfile({ id: userId, username: fallbackUsername, email: userEmail, full_name: '' });
+      setLoading(false);
+      return;
+    }
+
     try {
       console.log('🔍 Fetching profile for user ID:', userId);
       const { data, error } = await supabase
@@ -50,26 +63,49 @@ export default function App() {
 
   // Restore and subscribe to auth state
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session?.user) {
-        fetchProfile(session.user.id, session.user.email);
-      } else {
-        setLoading(false);
-      }
-    });
+    if (!isSupabaseConfigured) {
+      return;
+    }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session?.user) {
-        fetchProfile(session.user.id, session.user.email);
-      } else {
-        setUserProfile(null);
-        setLoading(false);
-      }
-    });
+    let isMounted = true;
+    let subscription = null;
 
-    return () => subscription.unsubscribe();
+    async function initAuth() {
+      try {
+        const { data: { session } = {} } = await supabase.auth.getSession();
+        if (!isMounted) return;
+        setSession(session || null);
+        if (session?.user) {
+          fetchProfile(session.user.id, session.user.email);
+        } else {
+          setLoading(false);
+        }
+
+        const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+          if (!isMounted) return;
+          setSession(session || null);
+          if (session?.user) {
+            fetchProfile(session.user.id, session.user.email);
+          } else {
+            setUserProfile(null);
+            setLoading(false);
+          }
+        });
+        subscription = data?.subscription;
+      } catch (err) {
+        console.warn('Auth initialization skipped:', err);
+        if (isMounted) setLoading(false);
+      }
+    }
+
+    initAuth();
+
+    return () => {
+      isMounted = false;
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+    };
   }, []);
 
   const handleOpenConversation = (targetUsername) => {
@@ -147,69 +183,196 @@ export default function App() {
 
   // 3. Otherwise, render Public Landing Page
   return (
-    <div className="relative min-h-screen bg-black text-white selection:bg-white selection:text-black overflow-hidden flex flex-col justify-between">
-      <div 
-        className="absolute inset-0 pointer-events-none opacity-40"
-        style={{
-          backgroundImage: 'radial-gradient(1.5px 1.5px at 20px 30px, #ffffff, rgba(0,0,0,0)), radial-gradient(1.5px 1.5px at 150px 150px, #ffffff, rgba(0,0,0,0)), radial-gradient(1px 1px at 300px 80px, #ffffff, rgba(0,0,0,0)), radial-gradient(1.5px 1.5px at 450px 220px, #ffffff, rgba(0,0,0,0)), radial-gradient(1px 1px at 600px 380px, #ffffff, rgba(0,0,0,0)), radial-gradient(1.5px 1.5px at 800px 100px, #ffffff, rgba(0,0,0,0))',
-          backgroundSize: '850px 850px'
-        }}
-      />
+    <div className="cj-canvas min-h-screen relative overflow-x-hidden">
+      <div className="relative z-10">
+        {/* Hero Section with Edge-to-Edge Dynamic Swirling Particle Canvas */}
+        <div className="relative w-full overflow-hidden">
+          {/* Dynamic Background Swirling Particle Canvas covering full hero background */}
+          <FlowingParticlesCanvas className="opacity-90" />
 
-      <header className="relative z-10 w-full px-8 py-6 flex items-center justify-between max-w-7xl mx-auto">
-        <div className="flex items-center space-x-2.5">
-          <div className="w-8 h-8 rounded-lg bg-white text-black font-extrabold flex items-center justify-center text-sm tracking-tighter">
-            SP
+          <div className="cj-wrap relative z-10">
+            <header className="cj-header">
+              <div className="cj-navpill">
+                <div className="cj-brand">
+                  <div className="cj-mark">
+                    <svg viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M4 5.5C4 4.67 4.67 4 5.5 4h13c.83 0 1.5.67 1.5 1.5v9c0 .83-.67 1.5-1.5 1.5H9l-4 4v-4H5.5C4.67 15 4 14.33 4 13.5v-8Z"
+                        fill="#F2ECDE"
+                      />
+                    </svg>
+                  </div>
+                  <span className="cj-wordmark">connectjutti</span>
+                </div>
+                <span className="cj-navdivider"></span>
+                <div className="cj-navactions">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalMode('login');
+                      setModalOpen(true);
+                    }}
+                    className="cj-btn cj-btn-text"
+                  >
+                    Log in
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalMode('signup');
+                      setModalOpen(true);
+                    }}
+                    className="cj-btn cj-btn-accent"
+                  >
+                    Sign up
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            <section className="cj-hero">
+              {/* Left Text Column */}
+              <div className="cj-hero-text text-left">
+                <div className="cj-eyebrow">
+                  <span className="cj-status-dot"></span>
+                  built for campus circles
+                </div>
+                <h1 className="cj-hero-title">
+                  Talk to your<br />
+                  <span className="cj-underline-wrap">
+                    people.
+                    <svg viewBox="0 0 160 14" preserveAspectRatio="none">
+                      <path
+                        d="M2 8 C 40 2, 120 2, 158 8"
+                        stroke="#EFA23D"
+                        strokeWidth="4"
+                        fill="none"
+                        strokeLinecap="round"
+                      />
+                      <path
+                        d="M2 12 C 40 7, 120 7, 158 12"
+                        stroke="#1B6C5D"
+                        strokeWidth="3"
+                        fill="none"
+                        strokeLinecap="round"
+                        opacity="0.6"
+                      />
+                    </svg>
+                  </span>
+                </h1>
+                <p className="cj-subcopy">
+                  ConnectJutti is where your campus keeps its group chats — circles, DMs, and study threads for people who already get you.
+                </p>
+                <div className="cj-cta-row">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalMode('signup');
+                      setModalOpen(true);
+                    }}
+                    className="cj-btn cj-btn-solid"
+                  >
+                    Sign up free
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalMode('login');
+                      setModalOpen(true);
+                    }}
+                    className="cj-btn cj-btn-ghost"
+                  >
+                    Log in
+                  </button>
+                </div>
+                <div className="cj-stat-row">
+                  <span><b>12,400+</b> students</span>
+                  <span className="cj-stat-sep"></span>
+                  <span><b>180+</b> campus circles</span>
+                </div>
+              </div>
+
+              {/* Right Collage Column */}
+              <div className="cj-collage">
+                <div className="cj-collage-inner">
+                  <svg className="cj-connectors" viewBox="0 0 420 460">
+                    <path
+                      d="M155 200 C 110 230, 110 250, 155 268"
+                      stroke="#17140F"
+                      strokeOpacity="0.16"
+                      strokeWidth="1.5"
+                      strokeDasharray="3 6"
+                      fill="none"
+                    />
+                    <path
+                      d="M310 290 C 350 250, 355 160, 335 108"
+                      stroke="#17140F"
+                      strokeOpacity="0.16"
+                      strokeWidth="1.5"
+                      strokeDasharray="3 6"
+                      fill="none"
+                    />
+                    <circle cx="155" cy="200" r="3.5" fill="#17140F" fillOpacity="0.32" />
+                    <circle cx="155" cy="268" r="3.5" fill="#17140F" fillOpacity="0.32" />
+                    <circle cx="335" cy="108" r="3.5" fill="#17140F" fillOpacity="0.32" />
+                  </svg>
+
+                  <div className="cj-chip cj-card-main">
+                    <div className="cj-card-row">
+                      <div className="cj-avatar">AS</div>
+                      <div>
+                        <div className="cj-card-name">Aashma Shrestha</div>
+                        <div className="cj-card-sub">CS batch · KU</div>
+                      </div>
+                    </div>
+                    <div className="mt-2.5 px-2.5 py-1.5 rounded-lg bg-[rgba(23,20,15,0.04)] text-xs text-[#17140F]">
+                      "Is anyone studying at the department library?"
+                    </div>
+                    <div className="cj-status-tag">
+                      <span className="cj-status-dot"></span>
+                      online now
+                    </div>
+                  </div>
+
+                  <div className="cj-chip cj-card-group">
+                    <span className="cj-group-tag">BCA study circle · 6 members</span>
+                    <div className="cj-typing-row">
+                      <div className="cj-typing-dots">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                      </div>
+                      <span className="cj-card-sub">Rojan is typing…</span>
+                    </div>
+                  </div>
+
+                  <div className="cj-chip cj-card-handle">
+                    <span className="cj-status-dot"></span>
+                    @suman_kt
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
-          <span className="font-bold text-lg tracking-tight">SajiloPatra</span>
         </div>
 
-        <div className="flex items-center space-x-4">
-          <button
-            onClick={() => { setModalMode('login'); setModalOpen(true); }}
-            className="text-xs font-semibold text-gray-300 hover:text-white transition px-4 py-2"
-          >
-            Log In
-          </button>
-          <button
-            onClick={() => { setModalMode('signup'); setModalOpen(true); }}
-            className="px-4 py-2 rounded-full text-xs font-semibold bg-white text-black hover:bg-gray-200 transition shadow-sm"
-          >
-            Launch App
-          </button>
-        </div>
-      </header>
+        {/* Marquee Wordmark Scroller */}
+        <MarqueeWordmark speed={28} />
 
-      <main className="relative z-10 flex-1 flex flex-col items-center justify-center text-center px-4 -mt-10">
-        <h1 className="text-6xl md:text-8xl font-extrabold tracking-tight text-white mb-6">
-          Sajilo<br />Patra
-        </h1>
-        <p className="max-w-md md:max-w-lg text-sm md:text-base text-gray-400 font-light leading-relaxed mb-10">
-          Match your vibes. Share your frequency. Connect and talk with other college students who share your niche.
-        </p>
+        {/* Section 1: Realtime WebSocket & Chat Preview */}
+        <RealtimeShowcaseSection />
 
-        <div className="flex items-center space-x-4">
-          <button
-            onClick={() => { setModalMode('login'); setModalOpen(true); }}
-            className="px-8 py-3 rounded-full bg-white text-black font-semibold text-sm hover:bg-gray-200 transition shadow-[0_0_25px_rgba(255,255,255,0.25)] active:scale-95"
-          >
-            Log in
-          </button>
-          <button
-            onClick={() => { setModalMode('signup'); setModalOpen(true); }}
-            className="px-8 py-3 rounded-full bg-[#181a20] text-gray-200 font-semibold text-sm border border-gray-800 hover:border-gray-700 hover:text-white transition active:scale-95"
-          >
-            Sign up
-          </button>
-        </div>
-      </main>
+        {/* Section 2: Community Design Lab & RFC Board */}
+        <CommunityIdeasBoard />
 
-      <footer className="relative z-10 pb-8 text-center">
-        <span className="text-[10px] tracking-[0.25em] text-gray-500 uppercase font-mono">
-          Scroll to explore
-        </span>
-        <div className="w-[1px] h-3 bg-gray-600 mx-auto mt-2 opacity-50" />
-      </footer>
+        {/* Footer */}
+        <CampusFooter
+          onOpenAuth={(mode) => {
+            setModalMode(mode);
+            setModalOpen(true);
+          }}
+        />
+      </div>
 
       <AuthModal
         isOpen={modalOpen}

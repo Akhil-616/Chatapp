@@ -13,8 +13,13 @@ export const WebSocketProvider = ({ children, session, username }) => {
   const connectWebSocket = useCallback(() => {
     if (!session?.access_token || !username) return;
 
-    // Use ws:// for local dev, wss:// for production
-    const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8080';
+    // Use VITE_WS_URL if set, otherwise fallback to local/dynamic resolution
+    let wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8080';
+    if (wsUrl.startsWith('http://')) {
+      wsUrl = wsUrl.replace('http://', 'ws://');
+    } else if (wsUrl.startsWith('https://')) {
+      wsUrl = wsUrl.replace('https://', 'wss://');
+    }
     const ws = new WebSocket(wsUrl);
     socketRef.current = ws;
 

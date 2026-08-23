@@ -22,11 +22,11 @@ export default function Sidebar({ activeTab, setActiveTab, unreadCount = 1, onGo
         {/* Logo / Brand Header */}
         <div className="flex items-center space-x-3 px-1 py-1">
           <div className="w-10 h-10 min-w-[2.5rem] rounded-xl bg-white text-black font-extrabold flex items-center justify-center text-sm shadow-md">
-            SP
+            CJ
           </div>
           <div className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
-            <h1 className="font-bold text-sm text-white leading-tight">Sajilo Patra</h1>
-            <p className="text-[10px] text-gray-400">University Network</p>
+            <h1 className="font-bold text-sm text-white leading-tight">ConnectJutti</h1>
+            <p className="text-[10px] text-gray-400">Campus Network</p>
           </div>
         </div>
 
