@@ -111,15 +111,16 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
   const displayName = fullName || userProfile?.username || 'Student';
 
   return (
-    <div className="flex-1 min-h-screen bg-[#F6F2EA] text-[#17140F] p-8 pl-24 max-w-2xl font-['Inter']">
-      <div className="mb-8">
-        <h1 className="text-3xl font-['Space_Grotesk'] font-extrabold tracking-tight text-[#17140F]">Student Profile</h1>
-        <p className="text-sm text-[#6B6355] mt-1">
-          Manage your Islington College academic identity, bio, and public handle.
-        </p>
-      </div>
+    <div className="flex-1 min-h-screen bg-[#F6F2EA] text-[#17140F] py-10 px-4 sm:px-8 pl-20 sm:pl-28 md:pl-64 flex flex-col items-center justify-start font-['Inter'] overflow-y-auto">
+      <div className="w-full max-w-2xl mx-auto">
+        <div className="mb-8">
+          <h1 className="text-3xl font-['Space_Grotesk'] font-extrabold tracking-tight text-[#17140F]">Student Profile</h1>
+          <p className="text-sm text-[#6B6355] mt-1">
+            Manage your Islington College academic identity, bio, and public handle.
+          </p>
+        </div>
 
-      <div className="bg-[#FFFCF5] border border-[rgba(23,20,15,0.1)] rounded-3xl p-7 shadow-xs space-y-6">
+        <div className="bg-[#FFFCF5] border border-[rgba(23,20,15,0.1)] rounded-3xl p-7 shadow-xs space-y-6">
         {/* User Header Card */}
         <div className="flex items-center space-x-4 pb-5 border-b border-[rgba(23,20,15,0.08)]">
           <div className="w-14 h-14 rounded-2xl bg-[#17140F] text-[#FFFCF5] font-['Space_Grotesk'] font-bold flex items-center justify-center text-lg shadow-xs">
@@ -259,5 +260,6 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
         </form>
       </div>
     </div>
-  );
+  </div>
+);
 }

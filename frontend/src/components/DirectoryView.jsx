@@ -58,24 +58,25 @@ export default function DirectoryView({ currentUsername, onOpenConversation }) {
   };
 
   return (
-    <div className="flex-1 min-h-screen bg-[#F6F2EA] text-[#17140F] p-8 pl-24 max-w-6xl font-['Inter']">
-      <div className="mb-8">
-        <h1 className="text-3xl font-['Space_Grotesk'] font-extrabold tracking-tight text-[#17140F]">Student Directory</h1>
-        <p className="text-sm text-[#6B6355] mt-1">
-          Browse and connect with peers across academic networks and universities.
-        </p>
-      </div>
+    <div className="flex-1 min-h-screen bg-[#F6F2EA] text-[#17140F] py-10 px-4 sm:px-8 pl-20 sm:pl-28 md:pl-64 flex flex-col items-center justify-start font-['Inter'] overflow-y-auto">
+      <div className="w-full max-w-4xl mx-auto">
+        <div className="mb-8">
+          <h1 className="text-3xl font-['Space_Grotesk'] font-extrabold tracking-tight text-[#17140F]">Student Directory</h1>
+          <p className="text-sm text-[#6B6355] mt-1">
+            Browse and connect with peers across academic networks and universities.
+          </p>
+        </div>
 
-      <div className="relative mb-8 max-w-xl">
-        <Search className="w-4 h-4 text-[#8A8275] absolute left-4 top-1/2 -translate-y-1/2" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search by student name, handle, or campus..."
-          className="w-full bg-[#FFFCF5] border border-[rgba(23,20,15,0.14)] rounded-2xl pl-11 pr-4 py-3 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] shadow-xs transition"
-        />
-      </div>
+        <div className="relative mb-8 max-w-xl">
+          <Search className="w-4 h-4 text-[#8A8275] absolute left-4 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by student name, handle, or campus..."
+            className="w-full bg-[#FFFCF5] border border-[rgba(23,20,15,0.14)] rounded-2xl pl-11 pr-4 py-3 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] shadow-xs transition"
+          />
+        </div>
 
       {loading ? (
         <div className="flex items-center space-x-2 text-[#6B6355] py-12">
@@ -133,5 +134,6 @@ export default function DirectoryView({ currentUsername, onOpenConversation }) {
         </div>
       )}
     </div>
-  );
+  </div>
+);
 }

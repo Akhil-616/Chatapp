@@ -30,35 +30,36 @@ export default function NotificationsView({ onOpenConversation }) {
   };
 
   return (
-    <div className="flex-1 min-h-screen bg-[#F6F2EA] text-[#17140F] p-8 pl-24 max-w-4xl font-['Inter']">
-      <div className="mb-8 flex items-end justify-between border-b border-[rgba(23,20,15,0.08)] pb-5">
-        <div>
-          <div className="flex items-center space-x-3">
-            <h1 className="text-3xl font-['Space_Grotesk'] font-extrabold tracking-tight text-[#17140F]">
-              Notifications
-            </h1>
-            {notifications.length > 0 && (
-              <span className="bg-[#17140F] text-[#FFFCF5] text-xs font-['Space_Mono'] font-bold px-2.5 py-0.5 rounded-full">
-                {notifications.length} NEW
-              </span>
-            )}
+    <div className="flex-1 min-h-screen bg-[#F6F2EA] text-[#17140F] py-10 px-4 sm:px-8 pl-20 sm:pl-28 md:pl-64 flex flex-col items-center justify-start font-['Inter'] overflow-y-auto">
+      <div className="w-full max-w-3xl mx-auto">
+        <div className="mb-8 flex items-end justify-between border-b border-[rgba(23,20,15,0.08)] pb-5">
+          <div>
+            <div className="flex items-center space-x-3">
+              <h1 className="text-3xl font-['Space_Grotesk'] font-extrabold tracking-tight text-[#17140F]">
+                Notifications
+              </h1>
+              {notifications.length > 0 && (
+                <span className="bg-[#17140F] text-[#FFFCF5] text-xs font-['Space_Mono'] font-bold px-2.5 py-0.5 rounded-full">
+                  {notifications.length} NEW
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-[#6B6355] mt-1">
+              Real-time notifications from your campus peers.
+            </p>
           </div>
-          <p className="text-sm text-[#6B6355] mt-1">
-            Real-time notifications from your campus peers.
-          </p>
-        </div>
 
-        {notifications.length > 0 && (
-          <button
-            type="button"
-            onClick={markAllNotificationsAsViewed}
-            className="inline-flex items-center space-x-1.5 text-xs font-['Space_Grotesk'] font-bold text-[#17140F] bg-[#FFFCF5] hover:bg-[#FAF6ED] px-3.5 py-2 rounded-xl border border-[rgba(23,20,15,0.12)] shadow-2xs transition cursor-pointer"
-          >
-            <CheckCheck className="w-3.5 h-3.5 text-[#1B6C5D]" />
-            <span>Mark All as Read</span>
-          </button>
-        )}
-      </div>
+          {notifications.length > 0 && (
+            <button
+              type="button"
+              onClick={markAllNotificationsAsViewed}
+              className="inline-flex items-center space-x-1.5 text-xs font-['Space_Grotesk'] font-bold text-[#17140F] bg-[#FFFCF5] hover:bg-[#FAF6ED] px-3.5 py-2 rounded-xl border border-[rgba(23,20,15,0.12)] shadow-2xs transition cursor-pointer"
+            >
+              <CheckCheck className="w-3.5 h-3.5 text-[#1B6C5D]" />
+              <span>Mark All as Read</span>
+            </button>
+          )}
+        </div>
 
       {notifications.length === 0 ? (
         <div className="p-12 rounded-3xl bg-[#FFFCF5] border border-[rgba(23,20,15,0.1)] text-center shadow-xs flex flex-col items-center justify-center space-y-3">
@@ -130,5 +131,6 @@ export default function NotificationsView({ onOpenConversation }) {
         </div>
       )}
     </div>
-  );
+  </div>
+);
 }
