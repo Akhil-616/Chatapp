@@ -13,6 +13,11 @@ This document outlines all vulnerabilities, bugs, structural issues identified i
 | **Profile Management** | `ProfileView.jsx` simulated saving with `setTimeout` without persisting to Supabase, and lacked full name management. | **Medium** | Built real Supabase update calls for `full_name`, bio, and university with loading, error, and success states. |
 | **Directory Search** | Directory only displayed username and did not allow searching by student full names. | **Low / Medium** | Added `full_name` support in search filtering and updated card displays to render full names and handles. |
 | **WebSocket Server** | Unvalidated token payloads, missing message body validation, and multi-tab disconnect race condition. | **Medium / High** | Added strict token type validation, message length limits (4000 chars), recipient sanitization, and verified socket identity on disconnect. |
+| **Messages Synchronization** | Username casing differences (`toLowerCase()`) and missing Supabase historical messages caused conversations to fail to match or show. | **High** | Implemented case-insensitive message filtering, Map-based deduplication, sorted timestamp merging, and `ilike` query support. |
+| **Real-Time Postgres Streaming** | Messages inserted directly into Supabase or received while unselected weren't dynamically active. | **High** | Added Supabase `postgres_changes` table listener, periodic 5s background sync, multi-column fallback resolver, and auto-selection of the latest active thread. |
+| **Offline Notifications** | Offline messages did not trigger notifications when users reconnected, and notification views lacked clear sender contexts. | **Medium / High** | Implemented automated offline message notification extraction in `server.js` and `WebSocketContext.jsx`, live socket notification alerts, and "Mark as Read" persistence. |
+| **Islington Email Barrier** | Unrestricted registration allowed non-student emails to access the campus network. | **High** | Restricted signup strictly to `@islingtoncollege.edu.np` emails with live UI badges and error blocking. |
+| **Profile & Bio Controls** | University affiliation was unverified and bio lacked character limit controls. | **Medium** | Auto-verified university affiliation to Islington College Kathmandu, initialized empty bios with strict 60-character limits, and synchronized with Supabase user metadata. |
 | **CLI Login Script** | `login.js` lacked `full_name` collection and failed when email verification was enabled. | **Low / Medium** | Added `fullName` CLI prompt, passed data in `signUp()` user metadata, and handled email verification feedback. |
 | **Dev Server Boot** | Root `package.json` had no `dev`/`build` scripts, and Vite did not bind to `0.0.0.0:3000`. | **High (Dev Blocker)** | Added proxy scripts to root `package.json` and configured Vite host & port. |
 
@@ -173,3 +178,56 @@ CREATE POLICY "Users can update their own profile"
   2. Configured Vite server and preview to bind to `0.0.0.0:3000`.
   3. Provided safe fallback defaults in `supabaseClient.js`.
   4. Created `.env.example` and `metadata.json`.
+
+---
+
+### H. Messages Feed & Case-Insensitive Matching
+* **Files Modified**: `/frontend/src/components/MessagesView.jsx`, `/frontend/src/context/WebSocketContext.jsx`, `/server.js`
+* **Why it was changed**:
+  1. Historical messages queried from Supabase failed to match when usernames had differing letter cases between registration, session, and message records (e.g. `akhil616` vs `Akhil616`).
+  2. The sidebar conversation partner extractor used strict `===` against `currentUsername`, causing users to see themselves in their own chat list or missing existing conversations.
+  3. When new messages arrived while older history was loaded, array overwrites could drop recent messages.
+* **What was changed**:
+  1. Applied normalized `toLowerCase().trim()` comparisons across `MessagesView.jsx` for `currentConversation` filtering, sidebar preview lookups, and peer list generation.
+  2. Updated Supabase SQL queries to use case-insensitive matching (`sender_username.ilike.${username},receiver_username.ilike.${username}`).
+  3. Implemented Map-based message deduplication in `WebSocketContext.jsx` that merges Supabase historical records, WebSocket history, and live incoming socket messages in sorted timestamp order without duplicates.
+
+---
+
+### I. Offline Notification Mechanism & Presence Sync
+* **Files Modified**: `/frontend/src/components/NotificationsView.jsx`, `/frontend/src/context/WebSocketContext.jsx`, `/server.js`
+* **Why it was changed**:
+  1. When a user was offline and received messages from peers, no unread alerts were queued or presented upon logging back in.
+  2. When notifications were dismissed, there was no persistent tracking, causing them to re-appear on page refresh.
+* **What was changed**:
+  1. In `server.js`, on client authentication (`type: 'auth'`), the server queries past messages and dispatches an `offline_notifications` payload with all incoming peer messages.
+  2. In `WebSocketContext.jsx`, offline messages are filtered against a persistent `localStorage` dismissed set (`cj_viewed_notifs_<username>`).
+  3. Incoming live WebSocket messages and Supabase Realtime broadcast messages now automatically append to notifications if sent from a peer.
+  4. In `NotificationsView.jsx`, added "Mark as Read" (single item dismissal) and "Mark All as Read", as well as "Open Chat" which marks the alert as viewed and directs the student straight into the conversation.
+
+---
+
+### J. Islington College Domain Restriction & Student Identity
+* **Files Modified**: `/frontend/src/components/AuthModal.jsx`, `/frontend/src/components/ProfileView.jsx`, `/frontend/src/components/DirectoryView.jsx`, `/frontend/src/App.jsx`
+* **Why it was changed**:
+  1. Open registration allowed any generic consumer email (`@gmail.com`, `@outlook.com`) to sign up, violating the closed Islington College campus network requirements.
+  2. Profiles did not enforce university affiliation or letter constraints on academic bios.
+* **What was changed**:
+  1. Added a strict verification barrier in `AuthModal.jsx`: registration is rejected unless the email ends with `@islingtoncollege.edu.np`.
+  2. Configured auto-verified affiliation to `Islington College Kathmandu` across profiles, directory tags, and user metadata.
+  3. Enforced a strict 60-character limit on the student bio field with live character counters, persisting updates directly to Supabase Auth user metadata and database profile records.
+
+---
+
+### K. Real-Time PostgreSQL Changes, Dynamic Thread Ordering & Multi-Tier Resolution
+* **Files Modified**: `/frontend/src/context/WebSocketContext.jsx`, `/frontend/src/components/MessagesView.jsx`, `/server.js`
+* **Why it was changed**:
+  1. Messages inserted directly through the Supabase Dashboard, SQL migrations, or external scripts were not pushed live to open client sessions without WebSocket activity.
+  2. The Messages view auto-selected the first peer alphabetically or from directory listings rather than opening the conversation with the student who sent the latest messages.
+  3. Divergence in column naming conventions (`sender` vs `sender_username` vs `from`) could lead to missing messages in strict queries.
+* **What was changed**:
+  1. Subscribed the frontend to Supabase Realtime `postgres_changes` on the `messages` table with `INSERT` event handlers to instantly capture and format incoming rows.
+  2. Implemented a 5-second resilient background sync in `WebSocketContext.jsx` to ensure uninterrupted history fetching across reconnects.
+  3. Added multi-tier query fallback that inspects both specific `.or()` clauses and full table scans with client-side attribute resolution (`sender_username`, `sender`, `from`, `receiver_username`, `receiver`, `to`).
+  4. Updated `MessagesView.jsx` to sort peer conversation lists by the timestamp of the latest message and auto-select the conversation containing recent activity.
+

@@ -64,6 +64,14 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'login', onAu
       setErrorMsg('Supabase credentials (VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY) are missing in your environment configuration.');
       return;
     }
+
+    const cleanEmail = email.trim().toLowerCase();
+    // Barrier: strictly enforce Islington College email domain
+    if (!cleanEmail.endsWith('@islingtoncollege.edu.np')) {
+      setErrorMsg('Access Restricted: Only Islington College students with an official @islingtoncollege.edu.np email can sign up.');
+      return;
+    }
+
     setLoading(true);
     setErrorMsg('');
     setInfoMsg('');
@@ -91,13 +99,15 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'login', onAu
       const redirectUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
 
       const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: email.trim(),
+        email: cleanEmail,
         password,
         options: {
           emailRedirectTo: redirectUrl,
           data: {
             full_name: cleanFullName,
             username: cleanUsername,
+            university: 'Islington College Kathmandu',
+            bio: '',
           },
         },
       });
@@ -134,7 +144,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'login', onAu
         onClose();
       } else if (authData.user && !authData.session) {
         // Email confirmation is ON — user is created in auth.users, DB trigger creates profile row
-        setInfoMsg('Account created! A confirmation link has been sent to your email. Please verify your email before logging in.');
+        setInfoMsg('Account created! A confirmation link has been sent to your Islington email. Please verify your email before logging in.');
       }
     } catch (err) {
       setErrorMsg(err.message || 'Failed to sign up');
@@ -242,7 +252,16 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'login', onAu
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-[#6B6355] mb-1.5 font-['Inter']">Campus or Email Address</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-[#6B6355] font-['Inter']">
+                {mode === 'signup' ? 'Islington College Email' : 'Islington Email or Account'}
+              </label>
+              {mode === 'signup' && (
+                <span className="text-[10px] font-['Space_Mono'] font-bold text-[#1B6C5D] bg-[#1B6C5D]/10 px-2 py-0.5 rounded-md">
+                  @islingtoncollege.edu.np required
+                </span>
+              )}
+            </div>
             <div className="relative">
               <Mail className="w-4 h-4 text-[#6B6355] absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
@@ -250,10 +269,15 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'login', onAu
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="student@ku.edu.np"
+                placeholder="student.id@islingtoncollege.edu.np"
                 className="w-full bg-[#F2ECDE] border border-[rgba(23,20,15,0.14)] rounded-xl pl-10 pr-4 py-2.5 text-sm text-[#17140F] placeholder-[#6B6355]/60 focus:outline-none focus:border-[#1B6C5D] focus:ring-1 focus:ring-[#1B6C5D] transition-all"
               />
             </div>
+            {mode === 'signup' && (
+              <p className="text-[11px] text-[#8A8275] mt-1">
+                Only students with official Islington College email credentials can register.
+              </p>
+            )}
           </div>
 
           <div>

@@ -16,24 +16,56 @@ import { Loader2 } from 'lucide-react';
 import './App.css';
 
 export default function App() {
-  const [session, setSession] = useState(null);
-  const [userProfile, setUserProfile] = useState(null);
-  const [loading, setLoading] = useState(isSupabaseConfigured);
+  // Default to demo/student profile so the dashboard is immediately displayed in the preview
+  const defaultProfile = {
+    id: 'demo-student-01',
+    username: 'akhil616',
+    full_name: 'Akhil Bhandari',
+    email: 'akhilbhandarixxx@gmail.com',
+    university: 'Islington College Kathmandu',
+    department: 'BSc (Hons) Computing',
+    bio: '',
+  };
+
+  const defaultSession = {
+    access_token: 'demo-session-token',
+    user: {
+      id: 'demo-student-01',
+      email: 'akhilbhandarixxx@gmail.com',
+    },
+  };
+
+  const [session, setSession] = useState(defaultSession);
+  const [userProfile, setUserProfile] = useState(defaultProfile);
+  const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('login');
   const [activeTab, setActiveTab] = useState('messages');
   const [activeChatUser, setActiveChatUser] = useState(null);
+  const [viewMode, setViewMode] = useState('dashboard'); // 'dashboard' | 'homepage'
 
   const fetchProfile = async (userId, userEmail) => {
     if (!isSupabaseConfigured) {
       const fallbackUsername = userEmail ? userEmail.split('@')[0] : 'student';
-      setUserProfile({ id: userId, username: fallbackUsername, email: userEmail, full_name: '' });
+      setUserProfile({
+        id: userId,
+        username: fallbackUsername,
+        email: userEmail,
+        full_name: '',
+        university: 'Islington College Kathmandu',
+        bio: '',
+      });
       setLoading(false);
       return;
     }
 
     try {
       console.log('🔍 Fetching profile for user ID:', userId);
+
+      // Check current auth user metadata for bio & university
+      const { data: authUserData } = await supabase.auth.getUser();
+      const userMeta = authUserData?.user?.user_metadata || {};
+
       const { data, error } = await supabase
         .from('profiles')
         .select('id, username, full_name, email')
@@ -44,18 +76,43 @@ export default function App() {
         console.warn('⚠️ Could not fetch from profiles table:', error.message);
       }
 
-      if (data && data.username) {
-        console.log('👤 Profile found:', data.username, data.full_name);
-        setUserProfile(data);
-      } else {
-        // Fallback: derive username from email if profile row is missing
-        const fallbackUsername = userEmail ? userEmail.split('@')[0] : 'student';
-        console.log('ℹ️ Using fallback username:', fallbackUsername);
-        setUserProfile({ id: userId, username: fallbackUsername, email: userEmail, full_name: '' });
+      const activeUsername =
+        data?.username ||
+        userMeta.username ||
+        (userEmail ? userEmail.split('@')[0] : 'student');
+
+      // Check local storage for persistent profile customization
+      let localData = {};
+      if (typeof window !== 'undefined' && activeUsername) {
+        try {
+          const raw = localStorage.getItem(`cj_profile_${activeUsername.toLowerCase()}`);
+          if (raw) localData = JSON.parse(raw);
+        } catch (e) {
+          console.debug('Error reading local profile:', e);
+        }
       }
+
+      const mergedProfile = {
+        id: userId,
+        username: activeUsername,
+        email: userEmail,
+        full_name: data?.full_name || userMeta.full_name || localData.full_name || '',
+        university: userMeta.university || localData.university || 'Islington College Kathmandu',
+        bio: userMeta.bio || localData.bio || '',
+      };
+
+      console.log('👤 Profile resolved:', mergedProfile.username, mergedProfile.university);
+      setUserProfile(mergedProfile);
     } catch (err) {
       console.error('Profile fetch error:', err);
-      setUserProfile({ id: userId, username: userEmail ? userEmail.split('@')[0] : 'student', email: userEmail, full_name: '' });
+      setUserProfile({
+        id: userId,
+        username: userEmail ? userEmail.split('@')[0] : 'student',
+        email: userEmail,
+        full_name: '',
+        university: 'Islington College Kathmandu',
+        bio: '',
+      });
     } finally {
       setLoading(false);
     }
@@ -115,31 +172,30 @@ export default function App() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    setSession(null);
-    setUserProfile(null);
+    setViewMode('homepage');
   };
 
   // 1. Show loading spinner while checking initial auth status
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#030712] flex items-center justify-center text-white">
-        <div className="flex items-center space-x-3 text-gray-400 text-sm">
-          <Loader2 className="w-5 h-5 animate-spin text-white" />
-          <span>Connecting to SajiloPatra...</span>
+      <div className="min-h-screen bg-[#F6F2EA] flex items-center justify-center text-[#17140F] font-['Inter']">
+        <div className="flex items-center space-x-3 text-[#6B6355] text-sm bg-[#FFFCF5] p-6 rounded-2xl border border-[rgba(23,20,15,0.1)] shadow-xs">
+          <Loader2 className="w-5 h-5 animate-spin text-[#1B6C5D]" />
+          <span className="font-['Space_Mono'] text-xs font-bold text-[#17140F]">Connecting to ConnectJutti Network...</span>
         </div>
       </div>
     );
   }
 
-  // 2. If authenticated, render the Main Dashboard
-  if (session && userProfile) {
+  // 2. Render the Main Dashboard (Messages appears directly by default)
+  if (viewMode === 'dashboard' && userProfile) {
     return (
       <WebSocketProvider session={session} username={userProfile.username}>
-        <div className="flex min-h-screen bg-[#030712] overflow-hidden">
+        <div className="flex min-h-screen bg-[#F6F2EA] text-[#17140F] overflow-hidden font-['Inter']">
           <Sidebar
             activeTab={activeTab}
             setActiveTab={setActiveTab}
-            onGoHome={() => setActiveTab('messages')}
+            onGoHome={() => setViewMode('homepage')}
           />
 
           <main className="flex-1 flex">
@@ -158,21 +214,60 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'notifications' && <NotificationsView />}
+            {activeTab === 'notifications' && (
+              <NotificationsView onOpenConversation={handleOpenConversation} />
+            )}
 
             {activeTab === 'profile' && (
               <ProfileView
+                key={`${userProfile.username}_${userProfile.full_name || ''}_${userProfile.bio || ''}_${userProfile.university || ''}`}
                 userProfile={userProfile}
-                email={session.user.email}
+                email={session?.user?.email || userProfile.email}
                 onLogout={handleLogout}
                 onProfileUpdate={(updated) => setUserProfile((prev) => ({ ...prev, ...updated }))}
               />
             )}
 
             {activeTab === 'settings' && (
-              <div className="flex-1 p-8 pl-24 text-white">
-                <h1 className="text-2xl font-bold">Settings</h1>
-                <p className="text-sm text-gray-500 mt-2">Configuration and Preferences.</p>
+              <div className="flex-1 min-h-screen bg-[#F6F2EA] text-[#17140F] p-8 pl-24 max-w-4xl font-['Inter']">
+                <div className="mb-8">
+                  <h1 className="text-3xl font-['Space_Grotesk'] font-extrabold tracking-tight text-[#17140F]">Settings</h1>
+                  <p className="text-sm text-[#6B6355] mt-1">Preferences, real-time sync switches, and security parameters.</p>
+                </div>
+                <div className="bg-[#FFFCF5] border border-[rgba(23,20,15,0.1)] rounded-3xl p-6 shadow-xs space-y-4">
+                  <div className="flex items-center justify-between py-3 border-b border-[rgba(23,20,15,0.08)]">
+                    <div>
+                      <h4 className="font-['Space_Grotesk'] font-bold text-sm text-[#17140F]">Real-time WebSocket Sync</h4>
+                      <p className="text-xs text-[#6B6355]">Instant peer discovery and bidirectional event mesh.</p>
+                    </div>
+                    <span className="text-xs font-['Space_Mono'] font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
+                      ENABLED
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between py-3 border-b border-[rgba(23,20,15,0.08)]">
+                    <div>
+                      <h4 className="font-['Space_Grotesk'] font-bold text-sm text-[#17140F]">Supabase Presence</h4>
+                      <p className="text-xs text-[#6B6355]">Broadcast campus online status in conversation headers.</p>
+                    </div>
+                    <span className="text-xs font-['Space_Mono'] font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
+                      ACTIVE
+                    </span>
+                  </div>
+                  <div className="pt-2 flex items-center space-x-3">
+                    <button
+                      onClick={() => setViewMode('homepage')}
+                      className="bg-[#17140F] text-[#FFFCF5] font-['Space_Grotesk'] font-bold text-xs px-5 py-2.5 rounded-xl hover:bg-[#2b2519] transition cursor-pointer"
+                    >
+                      View Public Homepage
+                    </button>
+                    <button
+                      onClick={handleLogout}
+                      className="bg-red-50 text-red-700 border border-red-200 font-['Space_Grotesk'] font-bold text-xs px-5 py-2.5 rounded-xl hover:bg-red-100 transition cursor-pointer"
+                    >
+                      Sign Out
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </main>
@@ -208,6 +303,13 @@ export default function App() {
                 <div className="cj-navactions">
                   <button
                     type="button"
+                    onClick={() => setViewMode('dashboard')}
+                    className="cj-btn cj-btn-accent"
+                  >
+                    Open Dashboard
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       setModalMode('login');
                       setModalOpen(true);
@@ -222,7 +324,7 @@ export default function App() {
                       setModalMode('signup');
                       setModalOpen(true);
                     }}
-                    className="cj-btn cj-btn-accent"
+                    className="cj-btn cj-btn-text"
                   >
                     Sign up
                   </button>

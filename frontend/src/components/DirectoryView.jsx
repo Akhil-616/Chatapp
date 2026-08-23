@@ -58,62 +58,64 @@ export default function DirectoryView({ currentUsername, onOpenConversation }) {
   };
 
   return (
-    <div className="flex-1 min-h-screen bg-[#030712] text-white p-8 pl-24 max-w-6xl">
+    <div className="flex-1 min-h-screen bg-[#F6F2EA] text-[#17140F] p-8 pl-24 max-w-6xl font-['Inter']">
       <div className="mb-8">
-        <h1 className="text-3xl font-extrabold tracking-tight">Student Directory</h1>
-        <p className="text-sm text-gray-400 mt-1">
-          Browse and connect with peers across universities.
+        <h1 className="text-3xl font-['Space_Grotesk'] font-extrabold tracking-tight text-[#17140F]">Student Directory</h1>
+        <p className="text-sm text-[#6B6355] mt-1">
+          Browse and connect with peers across academic networks and universities.
         </p>
       </div>
 
       <div className="relative mb-8 max-w-xl">
-        <Search className="w-4 h-4 text-gray-500 absolute left-4 top-1/2 -translate-y-1/2" />
+        <Search className="w-4 h-4 text-[#8A8275] absolute left-4 top-1/2 -translate-y-1/2" />
         <input
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search by student name, major, or university..."
-          className="w-full bg-[#0d1117] border border-gray-800 rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-700"
+          placeholder="Search by student name, handle, or campus..."
+          className="w-full bg-[#FFFCF5] border border-[rgba(23,20,15,0.14)] rounded-2xl pl-11 pr-4 py-3 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] shadow-xs transition"
         />
       </div>
 
       {loading ? (
-        <div className="flex items-center space-x-2 text-gray-500 py-12">
-          <Loader2 className="w-5 h-5 animate-spin" />
-          <span>Loading students...</span>
+        <div className="flex items-center space-x-2 text-[#6B6355] py-12">
+          <Loader2 className="w-5 h-5 animate-spin text-[#1B6C5D]" />
+          <span className="font-['Space_Mono'] text-xs">Loading students...</span>
         </div>
       ) : filteredStudents.length === 0 ? (
-        <p className="text-gray-500 text-sm">No other registered students found yet.</p>
+        <div className="p-8 rounded-2xl bg-[#FFFCF5] border border-[rgba(23,20,15,0.1)] text-center text-[#8A8275] text-sm">
+          No other registered students found. Invite classmates to join the network!
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredStudents.map((student) => (
             <div
               key={student.id || student.username}
-              className="bg-[#0b0e14] border border-gray-900 rounded-2xl p-5 hover:border-gray-800 transition"
+              className="bg-[#FFFCF5] border border-[rgba(23,20,15,0.1)] rounded-2xl p-5 hover:border-[rgba(23,20,15,0.25)] shadow-xs transition"
             >
               <div className="flex items-center space-x-3.5 mb-4">
-                <div className="w-11 h-11 rounded-full bg-white text-black font-bold flex items-center justify-center text-sm">
+                <div className="w-11 h-11 rounded-full bg-[#17140F] text-[#FFFCF5] font-['Space_Grotesk'] font-bold flex items-center justify-center text-sm shadow-xs">
                   {getInitials(student)}
                 </div>
                 <div>
-                  <h3 className="font-semibold text-sm text-white">
+                  <h3 className="font-['Space_Grotesk'] font-bold text-sm text-[#17140F]">
                     {student.full_name || student.username}
                   </h3>
-                  <p className="text-xs text-gray-400">
-                    @{student.username} • Nepal Academic Network
+                  <p className="text-xs text-[#6B6355]">
+                    @{student.username} • {student.university || student.campus || 'Islington College Kathmandu'}
                   </p>
                 </div>
               </div>
 
-              <div className="text-xs text-gray-400 mb-3">
-                Major: <span className="text-gray-200 font-medium">Registered Student</span>
+              <div className="text-xs text-[#6B6355] mb-3">
+                Faculty: <span className="text-[#17140F] font-semibold">{student.department || 'BSc (Hons) Computing'}</span>
               </div>
 
               <div className="flex flex-wrap gap-1.5 mb-5">
-                {['Engineering', 'Computer Science', 'Collaboration'].map((tag) => (
+                {['Islington College', 'Computing', 'Peer Network'].map((tag) => (
                   <span
                     key={tag}
-                    className="bg-[#161b22] text-gray-400 text-[11px] px-2.5 py-1 rounded-md border border-gray-800/80"
+                    className="bg-[#FAF6ED] text-[#6B6355] text-[11px] font-['Space_Mono'] px-2.5 py-1 rounded-md border border-[rgba(23,20,15,0.08)]"
                   >
                     {tag}
                   </span>
@@ -122,7 +124,7 @@ export default function DirectoryView({ currentUsername, onOpenConversation }) {
 
               <button
                 onClick={() => onOpenConversation(student.username)}
-                className="w-full bg-white text-black font-semibold text-xs py-2.5 rounded-lg hover:bg-gray-200 transition"
+                className="w-full bg-[#17140F] text-[#FFFCF5] font-['Space_Grotesk'] font-bold text-xs py-2.5 rounded-xl hover:bg-[#2b2519] transition shadow-xs cursor-pointer"
               >
                 Open Conversation
               </button>

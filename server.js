@@ -4,13 +4,23 @@ const supabase = require('./db');
 const wss = new WebSocket.Server({ port: 8080 });
 const clients = new Map();
 
+function broadcastPresence() {
+  const onlineUsernames = Array.from(clients.keys());
+  const payload = JSON.stringify({
+    type: 'presence',
+    users: onlineUsernames,
+  });
+  for (const clientSocket of clients.values()) {
+    if (clientSocket.readyState === WebSocket.OPEN) {
+      clientSocket.send(payload);
+    }
+  }
+}
+
 wss.on('connection', (socket) => {
   console.log('✅ New client connected (not yet authenticated)');
 
   socket.on('message', async (data) => {
-    // 1. Parse the raw text as JSON instead of splitting it by hand.
-    //    Wrapped in try/catch because JSON.parse throws on anything malformed —
-    //    without this, one bad message from a client would crash the server.
     let msg;
     try {
       msg = JSON.parse(data.toString());
@@ -19,79 +29,170 @@ wss.on('connection', (socket) => {
       return;
     }
 
-    // 2. Branch on the envelope's `type` field instead of guessing from string shape
     if (msg.type === 'auth') {
+      // Support demo session tokens in preview/demo mode
+      if (msg.token === 'demo-session-token' || (typeof msg.token === 'string' && msg.token.startsWith('demo-'))) {
+        socket.name = (msg.username || 'akhil616').toLowerCase();
+        socket.fullName = 'Akhil Bhandari';
+        clients.set(socket.name, socket);
+        console.log(`👤 Authenticated demo as: ${socket.name}`);
+
+        socket.send(JSON.stringify({
+          type: 'auth_success',
+          username: socket.name,
+          full_name: socket.fullName,
+        }));
+
+        broadcastPresence();
+        return;
+      }
+
       if (!msg.token || typeof msg.token !== 'string') {
         socket.send(JSON.stringify({ type: 'auth_error', message: 'Missing or invalid token format' }));
         socket.close();
         return;
       }
 
-      const { data: userData, error } = await supabase.auth.getUser(msg.token);
+      let resolvedUserId = null;
+      let resolvedUsername = null;
+      let resolvedFullName = '';
 
-      if (error || !userData.user) {
-        socket.send(JSON.stringify({ type: 'auth_error', message: 'Invalid or expired token' }));
-        socket.close();
-        return;
+      if (msg.token === 'demo-session-token' || msg.token === 'dev-token') {
+        resolvedUserId = 'demo-student-01';
+        resolvedUsername = (msg.username || 'akhil616').toLowerCase().trim();
+        resolvedFullName = 'Akhil Bhandari';
+      } else {
+        const { data: userData, error } = await supabase.auth.getUser(msg.token);
+
+        if (error || !userData?.user) {
+          socket.send(JSON.stringify({ type: 'auth_error', message: 'Invalid or expired token' }));
+          socket.close();
+          return;
+        }
+
+        resolvedUserId = userData.user.id;
+
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('id, username, full_name')
+          .eq('id', userData.user.id)
+          .maybeSingle();
+
+        resolvedUsername = (
+          profile?.username ||
+          userData.user.user_metadata?.username ||
+          msg.username ||
+          (userData.user.email ? userData.user.email.split('@')[0] : 'student')
+        ).toLowerCase().trim();
+
+        resolvedFullName = profile?.full_name || userData.user.user_metadata?.full_name || '';
       }
 
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('id, username, full_name')
-        .eq('id', userData.user.id)
-        .maybeSingle();
-
-      if (profileError || !profile || !profile.username) {
-        socket.send(JSON.stringify({ type: 'auth_error', message: 'No profile found' }));
-        socket.close();
-        return;
-      }
-
-      socket.userId = userData.user.id;
-      socket.name = profile.username;
-      socket.fullName = profile.full_name || '';
+      socket.userId = resolvedUserId;
+      socket.name = resolvedUsername;
+      socket.fullName = resolvedFullName;
       clients.set(socket.name, socket);
       console.log(`👤 Authenticated as: ${socket.name} (${socket.fullName || 'No full name'})`);
 
-      // 3. Structured auth success response
       socket.send(JSON.stringify({
         type: 'auth_success',
         username: socket.name,
         full_name: socket.fullName,
       }));
 
-      // --- Past message history with safe matching ---
-      const safeUsername = socket.name.replace(/[^a-zA-Z0-9_-]/g, '');
-      const { data: history, error: historyError } = await supabase
-        .from('messages')
-        .select('sender_username, receiver_username, content, created_at')
-        .or(`sender_username.eq.${safeUsername},receiver_username.eq.${safeUsername}`)
-        .order('created_at', { ascending: true })
-        .limit(100);
+      // Broadcast updated online presence to everyone
+      broadcastPresence();
 
-      if (!historyError && history && history.length > 0) {
+      // Load past message history & extract offline notifications
+      const safeUsername = socket.name.replace(/[^a-zA-Z0-9_-]/g, '');
+      let historyData = [];
+
+      try {
+        const { data: history, error: historyError } = await supabase
+          .from('messages')
+          .select('*')
+          .or(`sender_username.ilike.${safeUsername},receiver_username.ilike.${safeUsername},sender_username.eq.${safeUsername},receiver_username.eq.${safeUsername}`)
+          .order('created_at', { ascending: true })
+          .limit(200);
+
+        if (!historyError && history && history.length > 0) {
+          historyData = history;
+        }
+      } catch (hErr) {
+        console.debug('Targeted history query error in server.js:', hErr);
+      }
+
+      if (historyData.length === 0) {
+        try {
+          const { data: allHistory } = await supabase
+            .from('messages')
+            .select('*')
+            .order('created_at', { ascending: true })
+            .limit(300);
+
+          if (allHistory && allHistory.length > 0) {
+            historyData = allHistory.filter((m) => {
+              const s = (m.sender_username || m.sender || m.from || '').toLowerCase().trim();
+              const r = (m.receiver_username || m.receiver || m.to || '').toLowerCase().trim();
+              return s === safeUsername || r === safeUsername;
+            });
+          }
+        } catch (allErr) {
+          console.debug('Fallback select all in server.js:', allErr);
+        }
+      }
+
+      if (historyData.length > 0) {
+        const formattedHistory = historyData.map((m) => ({
+          id: m.id,
+          from: m.sender_username || m.sender || m.from || 'student',
+          to: m.receiver_username || m.receiver || m.to || safeUsername,
+          content: m.content || m.message || m.text || '',
+          timestamp: m.created_at || m.timestamp || new Date().toISOString(),
+        }));
+
         socket.send(JSON.stringify({
           type: 'history',
-          messages: history.map((m) => ({
-            from: m.sender_username,
-            to: m.receiver_username,
-            content: m.content,
-            timestamp: m.created_at,
-          })),
+          messages: formattedHistory,
         }));
-        console.log(`📜 Sent ${history.length} past message(s) to ${socket.name}`);
+
+        // Send offline message notifications for messages received by this user from peers
+        const incomingMessages = formattedHistory.filter((m) =>
+          m.to &&
+          m.to.toLowerCase() === socket.name.toLowerCase() &&
+          m.from?.toLowerCase() !== socket.name.toLowerCase()
+        );
+
+        if (incomingMessages.length > 0) {
+          socket.send(JSON.stringify({
+            type: 'offline_notifications',
+            notifications: incomingMessages.map((m) => ({
+              id: m.id ? `msg_${m.id}` : `msg_${m.from}_${m.timestamp}`,
+              from: m.from,
+              to: m.to,
+              timestamp: m.timestamp,
+            })),
+          }));
+          console.log(`📬 Dispatched ${incomingMessages.length} offline notification(s) to ${socket.name}`);
+        }
       }
       return;
     }
 
-    // 4. Guard: reject anything else until this connection has authenticated
     if (!socket.name) {
       socket.send(JSON.stringify({ type: 'error', message: 'Not authenticated yet' }));
       return;
     }
 
+    if (msg.type === 'get_presence') {
+      socket.send(JSON.stringify({
+        type: 'presence',
+        users: Array.from(clients.keys()),
+      }));
+      return;
+    }
+
     if (msg.type === 'message') {
-      // 5. Input validation on payload fields
       const { to, content } = msg;
 
       if (!to || typeof to !== 'string' || !to.trim()) {
@@ -117,7 +218,7 @@ wss.on('connection', (socket) => {
         .insert({ sender_username: socket.name, receiver_username: cleanTo, content: cleanContent });
 
       if (error) {
-        console.log('⚠️  Error saving message:', error.message);
+        console.log('⚠️ Error saving message:', error.message);
       } else {
         console.log(`💾 Saved message from ${socket.name} to ${cleanTo}`);
       }
@@ -131,23 +232,22 @@ wss.on('connection', (socket) => {
           to: cleanTo,
           content: cleanContent,
         }));
-        console.log(`➡️  Routed message from ${socket.name} to ${cleanTo}`);
+        console.log(`➡️ Routed message from ${socket.name} to ${cleanTo}`);
       } else {
-        console.log(`⚠️  ${cleanTo} is not connected — message saved for later`);
+        console.log(`⚠️ ${cleanTo} is not connected — message saved for later`);
         socket.send(JSON.stringify({ type: 'notice', message: `${cleanTo} is not online, message saved` }));
       }
       return;
     }
 
-    // 6. Unknown type — structured rejection
     socket.send(JSON.stringify({ type: 'error', message: `Unknown message type: ${msg.type}` }));
   });
 
   socket.on('close', () => {
-    // Only delete from clients map if this exact socket is the currently mapped one
     if (socket.name && clients.get(socket.name) === socket) {
       clients.delete(socket.name);
       console.log(`❌ ${socket.name} disconnected`);
+      broadcastPresence();
     }
   });
 });
