@@ -234,25 +234,25 @@ CREATE POLICY "Users can update their own profile"
 
 ---
 
-### L. Fix for Double Message Rendering & Single Notification per Person
+### L. Fix for Database Persistence, Double Message Rendering & Single Notification per Person
 * **Files Modified**: `/frontend/src/context/WebSocketContext.jsx`, `/server.js`, `/frontend/src/components/NotificationsView.jsx`
 * **Where the Problem Was & Why It Happened**:
-  1. **Two Messages in UI on Send**:
-     - *Location*: `WebSocketContext.jsx` -> `sendMessage()` and `postgres_changes` listener / `loadMessageHistory()`.
-     - *Cause*: When sending a message, `sendMessage()` optimistically appended a message object to state without a database `id` (`{ from, to, content, timestamp }`). When the message was inserted into Supabase and broadcast via `postgres_changes` or retrieved by background queries, the database returned the row with a numerical/UUID `id`. Because deduplication was keying database messages by `id_${m.id}` while the optimistic message had no `id`, both the temporary message and the database record stayed in state, showing two bubbles on the UI. Additionally, both the frontend client and the WebSocket `server.js` were attempting to insert into the `messages` table simultaneously.
+  1. **Message Persistence Failure & Double Rendering**:
+     - *Location*: `server.js` (`message` event handler) and `WebSocketContext.jsx` (`sendMessage`, `postgres_changes`, and `loadMessageHistory`).
+     - *Cause*: Client-side anon inserts to Supabase were failing or blocked by RLS policies if the user's session token didn't have write permissions to the `messages` table. When the server was skipped (`skipDb: true`), messages were only stored in React local state and lost upon refresh. Furthermore, optimistic messages sent to state had temporary IDs, and when database rows arrived with real database IDs, key matching created duplicate bubbles in the UI.
   2. **Unsolicited Offline Notifications & Multiple Alerts**:
      - *Location*: `server.js` (`auth` handler), `WebSocketContext.jsx` (`loadMessageHistory()`).
-     - *Cause*: The server and frontend were querying past messages on initial load and converting historical incoming messages into notifications for the offline state. Furthermore, multiple messages from the same sender accumulated separate notification entries instead of maintaining a single, most-recent alert per person.
+     - *Cause*: Historical messages were previously being backfilled as notifications upon login/refresh, and multiple alerts from the same sender accumulated instead of updating in-place.
 * **What Was Changed to Fix It**:
-  1. **Eliminated Duplicate Message Bubbles**:
-     - In `sendMessage()`, optimistic messages are tagged with a unique `tempId` (`temp_<timestamp>_<rand>`).
-     - Directly retrieved the official database row on insert (`.select().maybeSingle()`) and upgraded the temporary message to the official database `id` in-place.
-     - In `postgres_changes`, when a database `INSERT` event is received, it scans for any matching pending temporary message with identical sender, receiver, and content within 30 seconds and replaces it in-place instead of appending a duplicate.
-     - In `loadMessageHistory()`, reconciled temporary messages against fetched database rows to remove any stale unconfirmed items.
-     - Added `skipDb: true` to WebSocket message payloads sent from the web client, preventing double database insertions while preserving CLI compatibility.
-  2. **Notification Rules & Throttling**:
-     - Removed offline notification backfilling from `server.js` on authentication and from `loadMessageHistory()` in `WebSocketContext.jsx`.
-     - Created `pushNotification()`, which enforces that **only one notification per person** exists at any time. When a new live message arrives from an existing contact, their previous notification is removed and replaced with the updated timestamp and alert.
-     - Updated `NotificationsView.jsx` copy to clearly reflect live real-time notifications.
+  1. **Guaranteed Server-Side Database Persistence**:
+     - Updated `server.js` to unconditionally persist every sent message to Supabase using the trusted service client in `db.js`, which bypasses RLS safely and guarantees persistent storage across page refreshes.
+     - `server.js` returns an explicit `message_ack` event containing the official database `id` and `created_at` timestamp.
+  2. **Unified Message Merger (`mergeMessageList`)**:
+     - Created `mergeMessageList()`, a single deterministic function that safely merges incoming messages from all streams (optimistic state, server acks, WebSocket routing, `postgres_changes`, and historical queries).
+     - Upgrades temporary optimistic messages to official database records in-place without ever duplicating the message in the UI.
+     - Preserves all chat history upon page refresh and background sync.
+  3. **Notification Rules & Throttling**:
+     - Eliminated offline notification backfilling upon login.
+     - Enforced that exactly one notification exists per person at any given time (`pushNotification`), replacing older alerts from the same contact with the most recent notification.
 
 

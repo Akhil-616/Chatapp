@@ -173,7 +173,7 @@ wss.on('connection', (socket) => {
     }
 
     if (msg.type === 'message') {
-      const { to, content, skipDb } = msg;
+      const { to, content, tempId } = msg;
 
       if (!to || typeof to !== 'string' || !to.trim()) {
         socket.send(JSON.stringify({ type: 'error', message: 'Invalid recipient' }));
@@ -193,26 +193,51 @@ wss.on('connection', (socket) => {
       const cleanTo = to.trim().toLowerCase();
       const cleanContent = content.trim();
 
-      if (!skipDb) {
-        const { error } = await supabase
+      // Always persist to Supabase via server trusted service client
+      let savedMsg = null;
+      try {
+        const { data, error } = await supabase
           .from('messages')
-          .insert({ sender_username: socket.name, receiver_username: cleanTo, content: cleanContent });
+          .insert({ sender_username: socket.name, receiver_username: cleanTo, content: cleanContent })
+          .select()
+          .maybeSingle();
 
         if (error) {
-          console.log('⚠️ Error saving message:', error.message);
-        } else {
-          console.log(`💾 Saved message from ${socket.name} to ${cleanTo}`);
+          console.log('⚠️ Error saving message to Supabase:', error.message);
+        } else if (data) {
+          savedMsg = data;
+          console.log(`💾 Saved message ${data.id} from ${socket.name} to ${cleanTo}`);
         }
+      } catch (err) {
+        console.warn('Exception persisting message to Supabase in server.js:', err);
       }
+
+      const officialId = savedMsg?.id || null;
+      const msgTimestamp = savedMsg?.created_at || new Date().toISOString();
+
+      // Send ack to sender with official ID if available
+      socket.send(JSON.stringify({
+        type: 'message_ack',
+        tempId: tempId || null,
+        message: {
+          id: officialId,
+          from: socket.name,
+          to: cleanTo,
+          content: cleanContent,
+          timestamp: msgTimestamp,
+        },
+      }));
 
       const targetSocket = clients.get(cleanTo);
 
       if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
         targetSocket.send(JSON.stringify({
           type: 'message',
+          id: officialId,
           from: socket.name,
           to: cleanTo,
           content: cleanContent,
+          timestamp: msgTimestamp,
         }));
         console.log(`➡️ Routed message from ${socket.name} to ${cleanTo}`);
       } else {
