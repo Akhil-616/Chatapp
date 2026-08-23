@@ -44,7 +44,7 @@ export default function NotificationsView({ onOpenConversation }) {
             )}
           </div>
           <p className="text-sm text-[#6B6355] mt-1">
-            Real notifications for messages received while you were offline.
+            Real-time notifications from your campus peers.
           </p>
         </div>
 
@@ -69,7 +69,7 @@ export default function NotificationsView({ onOpenConversation }) {
             All caught up!
           </h2>
           <p className="text-xs text-[#6B6355] max-w-sm leading-relaxed">
-            You have no unread offline notifications. When peers send you messages while you are offline, alerts will appear here.
+            You have no unread notifications. When peers send you messages, live alerts will appear here.
           </p>
         </div>
       ) : (

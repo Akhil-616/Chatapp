@@ -68,6 +68,34 @@ export const WebSocketProvider = ({ children, session, username }) => {
     };
   }, []);
 
+  // Push single notification per person (replaces existing notification from same person if present)
+  const pushNotification = useCallback(
+    (senderUsername, messageTimestamp = new Date().toISOString()) => {
+      if (!senderUsername || !username) return;
+      const senderClean = senderUsername.trim();
+      const senderLower = senderClean.toLowerCase();
+      const userLower = username.toLowerCase().trim();
+
+      if (senderLower === userLower) return;
+
+      setNotifications((prev) => {
+        const notifId = `notif_${senderLower}_${Date.now()}`;
+        const newNotif = {
+          id: notifId,
+          from: senderClean,
+          to: username,
+          timestamp: messageTimestamp,
+        };
+        // Keep only ONE notification per person at a time (replace old one if present)
+        const otherSenders = prev.filter(
+          (n) => (n.from || '').toLowerCase().trim() !== senderLower
+        );
+        return [newNotif, ...otherSenders];
+      });
+    },
+    [username]
+  );
+
   // 1. Initial and recurring message history loader from Supabase
   const loadMessageHistory = useCallback(async () => {
     if (!username) return;
@@ -133,51 +161,38 @@ export const WebSocketProvider = ({ children, session, username }) => {
         }));
 
         setMessages((prev) => {
-          const map = new Map();
-          prev.forEach((m) => {
-            const key = m.id
-              ? `id_${m.id}`
-              : `${(m.from || '').toLowerCase()}_${(m.to || '').toLowerCase()}_${m.content}_${m.timestamp}`;
-            map.set(key, m);
-          });
+          // Reconcile optimistic messages:
+          // Keep pending temporary messages that have not yet been matched in fetched history
+          const tempStillPending = prev.filter(
+            (m) =>
+              typeof m.id === 'string' &&
+              m.id.startsWith('temp_') &&
+              !formatted.some(
+                (f) =>
+                  (f.from || '').toLowerCase() === (m.from || '').toLowerCase() &&
+                  (f.to || '').toLowerCase() === (m.to || '').toLowerCase() &&
+                  f.content === m.content &&
+                  Math.abs(new Date(f.timestamp || 0) - new Date(m.timestamp || 0)) < 30000
+              )
+          );
+
+          const dbMap = new Map();
           formatted.forEach((m) => {
             const key = m.id
               ? `id_${m.id}`
               : `${(m.from || '').toLowerCase()}_${(m.to || '').toLowerCase()}_${m.content}_${m.timestamp}`;
-            map.set(key, m);
+            dbMap.set(key, m);
           });
-          return Array.from(map.values()).sort(
+
+          return [...Array.from(dbMap.values()), ...tempStillPending].sort(
             (a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0)
           );
         });
-
-        // Process real offline messages sent to this user
-        const dismissed = getDismissedNotificationIds();
-        const incomingOffline = formatted
-          .filter(
-            (m) =>
-              (m.to?.toLowerCase() === userLower ||
-                (userEmail && m.to?.toLowerCase() === userEmail) ||
-                (emailPrefix && m.to?.toLowerCase() === emailPrefix)) &&
-              m.from?.toLowerCase() !== userLower
-          )
-          .map((m) => ({
-            id: m.id ? `msg_${m.id}` : `msg_${m.from}_${m.timestamp}`,
-            from: m.from,
-            to: m.to,
-            timestamp: m.timestamp,
-          }))
-          .filter((notif) => !dismissed.has(notif.id))
-          .reverse();
-
-        if (incomingOffline.length > 0) {
-          setNotifications(incomingOffline);
-        }
       }
     } catch (err) {
       console.warn('Could not load past message history:', err);
     }
-  }, [username, session, getDismissedNotificationIds]);
+  }, [username, session]);
 
   // 2. Connect WebSocket server
   const connectWebSocket = useCallback(() => {
@@ -233,16 +248,6 @@ export const WebSocketProvider = ({ children, session, username }) => {
               }
               break;
 
-            case 'offline_notifications':
-              if (Array.isArray(data.notifications)) {
-                const dismissed = getDismissedNotificationIds();
-                const activeOffline = data.notifications.filter((n) => !dismissed.has(n.id));
-                if (activeOffline.length > 0) {
-                  setNotifications(activeOffline);
-                }
-              }
-              break;
-
             case 'message': {
               const newMsg = {
                 from: data.from,
@@ -256,19 +261,16 @@ export const WebSocketProvider = ({ children, session, username }) => {
                     (m.from || '').toLowerCase() === (data.from || '').toLowerCase() &&
                     (m.to || '').toLowerCase() === (username || '').toLowerCase() &&
                     m.content === data.content &&
-                    Math.abs(new Date(m.timestamp) - new Date(newMsg.timestamp)) < 3000
+                    Math.abs(new Date(m.timestamp || 0) - new Date(newMsg.timestamp)) < 15000
                 );
                 if (exists) return prev;
-                return [...prev, newMsg];
+                return [...prev, newMsg].sort(
+                  (a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0)
+                );
               });
 
-              // Add notification for incoming message
               if (data.from && data.from.toLowerCase() !== username.toLowerCase()) {
-                const notifId = `msg_${data.from}_${Date.now()}`;
-                setNotifications((prev) => [
-                  { id: notifId, from: data.from, to: username, timestamp: new Date().toISOString() },
-                  ...prev.filter((n) => n.id !== notifId),
-                ]);
+                pushNotification(data.from, newMsg.timestamp);
               }
               break;
             }
@@ -311,7 +313,7 @@ export const WebSocketProvider = ({ children, session, username }) => {
       console.warn('WebSocket connection init exception:', e);
       setIsConnected(false);
     }
-  }, [session, username, getDismissedNotificationIds]);
+  }, [session, username, pushNotification]);
 
   useEffect(() => {
     connectWebSocketRef.current = connectWebSocket;
@@ -355,25 +357,41 @@ export const WebSocketProvider = ({ children, session, username }) => {
           if (toLower === userLower || fromLower === userLower) {
             const newMsg = { id: row.id, from, to, content, timestamp };
             setMessages((prev) => {
-              const exists = prev.some(
-                (m) =>
-                  (m.id && row.id && m.id === row.id) ||
-                  ((m.from || '').toLowerCase() === fromLower &&
-                    (m.to || '').toLowerCase() === toLower &&
-                    m.content === content)
-              );
-              if (exists) return prev;
+              // 1. If row.id already exists, skip
+              if (prev.some((m) => m.id && row.id && m.id === row.id)) {
+                return prev;
+              }
+
+              // 2. If matching pending temporary message exists, replace it in-place
+              let replaced = false;
+              const updated = prev.map((m) => {
+                if (
+                  !replaced &&
+                  (!m.id || (typeof m.id === 'string' && m.id.startsWith('temp_'))) &&
+                  (m.from || '').toLowerCase() === fromLower &&
+                  (m.to || '').toLowerCase() === toLower &&
+                  m.content === content &&
+                  Math.abs(new Date(m.timestamp || 0) - new Date(timestamp)) < 30000
+                ) {
+                  replaced = true;
+                  return newMsg;
+                }
+                return m;
+              });
+
+              if (replaced) {
+                return updated.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+              }
+
+              // 3. Otherwise, append
               return [...prev, newMsg].sort(
                 (a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0)
               );
             });
 
+            // If this is an incoming live message from a peer, push a single live notification
             if (toLower === userLower && fromLower !== userLower) {
-              const notifId = row.id ? `msg_${row.id}` : `msg_${from}_${Date.now()}`;
-              setNotifications((prev) => [
-                { id: notifId, from, to: username, timestamp },
-                ...prev.filter((n) => n.id !== notifId),
-              ]);
+              pushNotification(from, timestamp);
             }
           }
         }
@@ -386,26 +404,25 @@ export const WebSocketProvider = ({ children, session, username }) => {
         const fromLower = (payload.from || '').toLowerCase();
         const userLower = username.toLowerCase();
 
-        if (toLower === userLower || fromLower === userLower) {
+        if (toLower === userLower) {
           setMessages((prev) => {
             const exists = prev.some(
               (m) =>
-                (m.from || '').toLowerCase() === fromLower &&
-                (m.to || '').toLowerCase() === toLower &&
-                m.content === payload.content &&
-                Math.abs(new Date(m.timestamp) - new Date(payload.timestamp)) < 3000
+                (m.id && payload.id && m.id === payload.id) ||
+                ((m.from || '').toLowerCase() === fromLower &&
+                  (m.to || '').toLowerCase() === toLower &&
+                  m.content === payload.content &&
+                  Math.abs(new Date(m.timestamp || 0) - new Date(payload.timestamp || 0)) < 15000)
             );
             if (exists) return prev;
-            return [...prev, payload];
+            return [...prev, payload].sort(
+              (a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0)
+            );
           });
 
-          // Add notification for incoming message
-          if (toLower === userLower && fromLower !== userLower) {
-            const notifId = payload.id ? `msg_${payload.id}` : `msg_${payload.from}_${Date.now()}`;
-            setNotifications((prev) => [
-              { id: notifId, from: payload.from, to: username, timestamp: payload.timestamp || new Date().toISOString() },
-              ...prev.filter((n) => n.id !== notifId),
-            ]);
+          // Add single notification per person
+          if (fromLower !== userLower) {
+            pushNotification(payload.from, payload.timestamp);
           }
         }
       })
@@ -424,7 +441,7 @@ export const WebSocketProvider = ({ children, session, username }) => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [username, loadMessageHistory]);
+  }, [username, loadMessageHistory, pushNotification]);
 
   // Recurring background sync for Supabase message history
   useEffect(() => {
@@ -460,45 +477,73 @@ export const WebSocketProvider = ({ children, session, username }) => {
     if (!content || !toUsername || !username) return false;
 
     const trimmedContent = content.trim();
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const newMsg = {
+      id: tempId,
       from: username,
       to: toUsername,
       content: trimmedContent,
       timestamp: new Date().toISOString(),
     };
 
-    // Optimistically update local message state
+    // Optimistically update local message state with tempId
     setMessages((prev) => [...prev, newMsg]);
 
-    // 1) Send via WebSocket if ready
+    // 1) Send via WebSocket if ready (skipDb: true since direct Supabase persistence is handled below)
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(
         JSON.stringify({
           type: 'message',
           to: toUsername,
           content: trimmedContent,
+          skipDb: true,
         })
       );
     }
 
-    // 2) Broadcast via Supabase channel for peer delivery
+    // 2) Persist directly to Supabase messages table and retrieve official row ID
+    let officialId = null;
+    try {
+      const { data: inserted, error } = await supabase
+        .from('messages')
+        .insert({
+          sender_username: username,
+          receiver_username: toUsername,
+          content: trimmedContent,
+        })
+        .select()
+        .maybeSingle();
+
+      if (!error && inserted) {
+        officialId = inserted.id;
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === tempId
+              ? {
+                  id: inserted.id,
+                  from: inserted.sender_username || username,
+                  to: inserted.receiver_username || toUsername,
+                  content: inserted.content || trimmedContent,
+                  timestamp: inserted.created_at || newMsg.timestamp,
+                }
+              : m
+          )
+        );
+      }
+    } catch (err) {
+      console.warn('Error persisting message to Supabase table:', err);
+    }
+
+    // 3) Broadcast via Supabase channel for peer delivery
     if (supabaseChannelRef.current) {
       supabaseChannelRef.current.send({
         type: 'broadcast',
         event: 'new_message',
-        payload: newMsg,
+        payload: {
+          ...newMsg,
+          id: officialId || tempId,
+        },
       });
-    }
-
-    // 3) Persist to Supabase messages table
-    try {
-      await supabase.from('messages').insert({
-        sender_username: username,
-        receiver_username: toUsername,
-        content: trimmedContent,
-      });
-    } catch (err) {
-      console.warn('Error persisting message to Supabase table:', err);
     }
 
     return true;

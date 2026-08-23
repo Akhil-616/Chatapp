@@ -15,7 +15,8 @@ This document outlines all vulnerabilities, bugs, structural issues identified i
 | **WebSocket Server** | Unvalidated token payloads, missing message body validation, and multi-tab disconnect race condition. | **Medium / High** | Added strict token type validation, message length limits (4000 chars), recipient sanitization, and verified socket identity on disconnect. |
 | **Messages Synchronization** | Username casing differences (`toLowerCase()`) and missing Supabase historical messages caused conversations to fail to match or show. | **High** | Implemented case-insensitive message filtering, Map-based deduplication, sorted timestamp merging, and `ilike` query support. |
 | **Real-Time Postgres Streaming** | Messages inserted directly into Supabase or received while unselected weren't dynamically active. | **High** | Added Supabase `postgres_changes` table listener, periodic 5s background sync, multi-column fallback resolver, and auto-selection of the latest active thread. |
-| **Offline Notifications** | Offline messages did not trigger notifications when users reconnected, and notification views lacked clear sender contexts. | **Medium / High** | Implemented automated offline message notification extraction in `server.js` and `WebSocketContext.jsx`, live socket notification alerts, and "Mark as Read" persistence. |
+| **Duplicate Message in UI** | Sending a message created an optimistic UI entry with no database ID. Subsequent database inserts and `postgres_changes` listener appended the database row with `id` alongside the temporary message, displaying two bubbles. | **High** | Implemented in-place ID upgrade on temporary messages, temporary message reconciliation during `loadMessageHistory`, and added `skipDb: true` over WebSocket to eliminate duplicate server inserts. |
+| **Notification Rules & Throttling** | Notifications were being backfilled from historical messages while offline, and multiple notifications from the same sender accumulated. | **Medium / High** | Removed offline notification generation on login/history load. Enforced real-time only notifications and throttled to exactly one notification per sender (replacing previous alerts from the same person). |
 | **Islington Email Barrier** | Unrestricted registration allowed non-student emails to access the campus network. | **High** | Restricted signup strictly to `@islingtoncollege.edu.np` emails with live UI badges and error blocking. |
 | **Profile & Bio Controls** | University affiliation was unverified and bio lacked character limit controls. | **Medium** | Auto-verified university affiliation to Islington College Kathmandu, initialized empty bios with strict 60-character limits, and synchronized with Supabase user metadata. |
 | **CLI Login Script** | `login.js` lacked `full_name` collection and failed when email verification was enabled. | **Low / Medium** | Added `fullName` CLI prompt, passed data in `signUp()` user metadata, and handled email verification feedback. |
@@ -230,4 +231,28 @@ CREATE POLICY "Users can update their own profile"
   2. Implemented a 5-second resilient background sync in `WebSocketContext.jsx` to ensure uninterrupted history fetching across reconnects.
   3. Added multi-tier query fallback that inspects both specific `.or()` clauses and full table scans with client-side attribute resolution (`sender_username`, `sender`, `from`, `receiver_username`, `receiver`, `to`).
   4. Updated `MessagesView.jsx` to sort peer conversation lists by the timestamp of the latest message and auto-select the conversation containing recent activity.
+
+---
+
+### L. Fix for Double Message Rendering & Single Notification per Person
+* **Files Modified**: `/frontend/src/context/WebSocketContext.jsx`, `/server.js`, `/frontend/src/components/NotificationsView.jsx`
+* **Where the Problem Was & Why It Happened**:
+  1. **Two Messages in UI on Send**:
+     - *Location*: `WebSocketContext.jsx` -> `sendMessage()` and `postgres_changes` listener / `loadMessageHistory()`.
+     - *Cause*: When sending a message, `sendMessage()` optimistically appended a message object to state without a database `id` (`{ from, to, content, timestamp }`). When the message was inserted into Supabase and broadcast via `postgres_changes` or retrieved by background queries, the database returned the row with a numerical/UUID `id`. Because deduplication was keying database messages by `id_${m.id}` while the optimistic message had no `id`, both the temporary message and the database record stayed in state, showing two bubbles on the UI. Additionally, both the frontend client and the WebSocket `server.js` were attempting to insert into the `messages` table simultaneously.
+  2. **Unsolicited Offline Notifications & Multiple Alerts**:
+     - *Location*: `server.js` (`auth` handler), `WebSocketContext.jsx` (`loadMessageHistory()`).
+     - *Cause*: The server and frontend were querying past messages on initial load and converting historical incoming messages into notifications for the offline state. Furthermore, multiple messages from the same sender accumulated separate notification entries instead of maintaining a single, most-recent alert per person.
+* **What Was Changed to Fix It**:
+  1. **Eliminated Duplicate Message Bubbles**:
+     - In `sendMessage()`, optimistic messages are tagged with a unique `tempId` (`temp_<timestamp>_<rand>`).
+     - Directly retrieved the official database row on insert (`.select().maybeSingle()`) and upgraded the temporary message to the official database `id` in-place.
+     - In `postgres_changes`, when a database `INSERT` event is received, it scans for any matching pending temporary message with identical sender, receiver, and content within 30 seconds and replaces it in-place instead of appending a duplicate.
+     - In `loadMessageHistory()`, reconciled temporary messages against fetched database rows to remove any stale unconfirmed items.
+     - Added `skipDb: true` to WebSocket message payloads sent from the web client, preventing double database insertions while preserving CLI compatibility.
+  2. **Notification Rules & Throttling**:
+     - Removed offline notification backfilling from `server.js` on authentication and from `loadMessageHistory()` in `WebSocketContext.jsx`.
+     - Created `pushNotification()`, which enforces that **only one notification per person** exists at any time. When a new live message arrives from an existing contact, their previous notification is removed and replaced with the updated timestamp and alert.
+     - Updated `NotificationsView.jsx` copy to clearly reflect live real-time notifications.
+
 

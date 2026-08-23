@@ -155,26 +155,6 @@ wss.on('connection', (socket) => {
           type: 'history',
           messages: formattedHistory,
         }));
-
-        // Send offline message notifications for messages received by this user from peers
-        const incomingMessages = formattedHistory.filter((m) =>
-          m.to &&
-          m.to.toLowerCase() === socket.name.toLowerCase() &&
-          m.from?.toLowerCase() !== socket.name.toLowerCase()
-        );
-
-        if (incomingMessages.length > 0) {
-          socket.send(JSON.stringify({
-            type: 'offline_notifications',
-            notifications: incomingMessages.map((m) => ({
-              id: m.id ? `msg_${m.id}` : `msg_${m.from}_${m.timestamp}`,
-              from: m.from,
-              to: m.to,
-              timestamp: m.timestamp,
-            })),
-          }));
-          console.log(`📬 Dispatched ${incomingMessages.length} offline notification(s) to ${socket.name}`);
-        }
       }
       return;
     }
@@ -193,7 +173,7 @@ wss.on('connection', (socket) => {
     }
 
     if (msg.type === 'message') {
-      const { to, content } = msg;
+      const { to, content, skipDb } = msg;
 
       if (!to || typeof to !== 'string' || !to.trim()) {
         socket.send(JSON.stringify({ type: 'error', message: 'Invalid recipient' }));
@@ -213,14 +193,16 @@ wss.on('connection', (socket) => {
       const cleanTo = to.trim().toLowerCase();
       const cleanContent = content.trim();
 
-      const { error } = await supabase
-        .from('messages')
-        .insert({ sender_username: socket.name, receiver_username: cleanTo, content: cleanContent });
+      if (!skipDb) {
+        const { error } = await supabase
+          .from('messages')
+          .insert({ sender_username: socket.name, receiver_username: cleanTo, content: cleanContent });
 
-      if (error) {
-        console.log('⚠️ Error saving message:', error.message);
-      } else {
-        console.log(`💾 Saved message from ${socket.name} to ${cleanTo}`);
+        if (error) {
+          console.log('⚠️ Error saving message:', error.message);
+        } else {
+          console.log(`💾 Saved message from ${socket.name} to ${cleanTo}`);
+        }
       }
 
       const targetSocket = clients.get(cleanTo);
