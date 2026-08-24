@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
+import { getCollegeFromEmail } from './lib/collegeUtils';
 import AuthModal from './components/AuthModal';
 import Sidebar from './components/Sidebar';
 import MessagesView from './components/MessagesView';
@@ -22,9 +23,12 @@ export default function App() {
     username: 'akhil616',
     full_name: 'Akhil Bhandari',
     email: 'akhilbhandarixxx@gmail.com',
+    college: 'Islington College Kathmandu',
     university: 'Islington College Kathmandu',
-    department: 'BSc (Hons) Computing',
-    bio: '',
+    faculty: 'BSc (Hons) Computing',
+    section: 'Section A',
+    gender: 'Male',
+    bio: 'Computing student, Web dev enthusiast',
   };
 
   const defaultSession = {
@@ -45,6 +49,8 @@ export default function App() {
   const [viewMode, setViewMode] = useState('dashboard'); // 'dashboard' | 'homepage'
 
   const fetchProfile = async (userId, userEmail) => {
+    const derivedCollege = getCollegeFromEmail(userEmail);
+
     if (!isSupabaseConfigured) {
       const fallbackUsername = userEmail ? userEmail.split('@')[0] : 'student';
       setUserProfile({
@@ -52,7 +58,11 @@ export default function App() {
         username: fallbackUsername,
         email: userEmail,
         full_name: '',
-        university: 'Islington College Kathmandu',
+        college: derivedCollege,
+        university: derivedCollege,
+        faculty: '',
+        section: '',
+        gender: '',
         bio: '',
       });
       setLoading(false);
@@ -62,22 +72,35 @@ export default function App() {
     try {
       console.log('🔍 Fetching profile for user ID:', userId);
 
-      // Check current auth user metadata for bio & university
+      // Check current auth user metadata
       const { data: authUserData } = await supabase.auth.getUser();
       const userMeta = authUserData?.user?.user_metadata || {};
 
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, username, full_name, email')
-        .eq('id', userId)
-        .maybeSingle();
+      let dbProfile = null;
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('id, username, full_name, email, college, faculty, section, gender, bio')
+          .eq('id', userId)
+          .maybeSingle();
 
-      if (error) {
-        console.warn('⚠️ Could not fetch from profiles table:', error.message);
+        if (error) {
+          console.warn('⚠️ Extended columns query note:', error.message);
+          const { data: baseData } = await supabase
+            .from('profiles')
+            .select('id, username, full_name, email')
+            .eq('id', userId)
+            .maybeSingle();
+          dbProfile = baseData;
+        } else {
+          dbProfile = data;
+        }
+      } catch (err) {
+        console.debug('Profiles query fallback:', err);
       }
 
       const activeUsername =
-        data?.username ||
+        dbProfile?.username ||
         userMeta.username ||
         (userEmail ? userEmail.split('@')[0] : 'student');
 
@@ -96,12 +119,16 @@ export default function App() {
         id: userId,
         username: activeUsername,
         email: userEmail,
-        full_name: data?.full_name || userMeta.full_name || localData.full_name || '',
-        university: userMeta.university || localData.university || 'Islington College Kathmandu',
-        bio: userMeta.bio || localData.bio || '',
+        full_name: dbProfile?.full_name || userMeta.full_name || localData.full_name || '',
+        college: dbProfile?.college || userMeta.college || localData.college || derivedCollege,
+        university: dbProfile?.college || userMeta.university || localData.university || derivedCollege,
+        faculty: dbProfile?.faculty || userMeta.faculty || localData.faculty || '',
+        section: dbProfile?.section || userMeta.section || localData.section || '',
+        gender: dbProfile?.gender || userMeta.gender || localData.gender || '',
+        bio: dbProfile?.bio || userMeta.bio || localData.bio || '',
       };
 
-      console.log('👤 Profile resolved:', mergedProfile.username, mergedProfile.university);
+      console.log('👤 Profile resolved:', mergedProfile.username, mergedProfile.college);
       setUserProfile(mergedProfile);
     } catch (err) {
       console.error('Profile fetch error:', err);
@@ -110,7 +137,11 @@ export default function App() {
         username: userEmail ? userEmail.split('@')[0] : 'student',
         email: userEmail,
         full_name: '',
-        university: 'Islington College Kathmandu',
+        college: derivedCollege,
+        university: derivedCollege,
+        faculty: '',
+        section: '',
+        gender: '',
         bio: '',
       });
     } finally {

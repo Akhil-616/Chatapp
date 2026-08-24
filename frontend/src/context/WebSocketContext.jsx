@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabaseClient';
 
 const WebSocketContext = createContext(null);
@@ -78,6 +78,10 @@ export const WebSocketProvider = ({ children, session, username }) => {
   const [onlineUsers, setOnlineUsers] = useState(new Set());
   const [notifications, setNotifications] = useState([]);
   const [profilesMap, setProfilesMap] = useState({});
+  const [profilesList, setProfilesList] = useState([]);
+  const [friendRequests, setFriendRequests] = useState([]);
+  const [currentUserId, setCurrentUserId] = useState(session?.user?.id || null);
+
   const socketRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const connectWebSocketRef = useRef(null);
@@ -98,46 +102,121 @@ export const WebSocketProvider = ({ children, session, username }) => {
   }, [username]);
 
   // Helper to persist dismissed notification IDs in localStorage
-  const saveDismissedNotificationId = useCallback((id) => {
-    if (!username || !id || typeof window === 'undefined') return;
-    try {
-      const current = getDismissedNotificationIds();
-      current.add(id);
-      localStorage.setItem(
-        `cj_viewed_notifs_${username.toLowerCase()}`,
-        JSON.stringify(Array.from(current))
-      );
-    } catch (e) {
-      console.debug('Error saving viewed notification:', e);
-    }
-  }, [username, getDismissedNotificationIds]);
+  const saveDismissedNotificationId = useCallback(
+    (id) => {
+      if (!username || !id || typeof window === 'undefined') return;
+      try {
+        const current = getDismissedNotificationIds();
+        current.add(id);
+        localStorage.setItem(
+          `cj_viewed_notifs_${username.toLowerCase()}`,
+          JSON.stringify(Array.from(current))
+        );
+      } catch (e) {
+        console.debug('Error saving viewed notification:', e);
+      }
+    },
+    [username, getDismissedNotificationIds]
+  );
 
-  // Load registered user profiles for clean display names in notifications
+  // Load all registered user profiles
+  const loadProfiles = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.from('profiles').select('*');
+      if (!error && data) {
+        setProfilesList(data);
+        const map = {};
+        data.forEach((p) => {
+          if (p.username) {
+            map[p.username.toLowerCase()] = p.full_name || p.username;
+          }
+        });
+        setProfilesMap(map);
+
+        // Resolve current user ID if not already known
+        if (username) {
+          const myProfile = data.find(
+            (p) => p.username?.toLowerCase() === username.toLowerCase()
+          );
+          if (myProfile?.id) {
+            setCurrentUserId(myProfile.id);
+          }
+        }
+      }
+    } catch (err) {
+      console.debug('Could not fetch profiles map:', err);
+    }
+  }, [username]);
+
   useEffect(() => {
     let isMounted = true;
-    async function loadProfiles() {
-      try {
-        const { data } = await supabase.from('profiles').select('username, full_name');
-        if (isMounted && data) {
-          const map = {};
-          data.forEach((p) => {
-            if (p.username) {
-              map[p.username.toLowerCase()] = p.full_name || p.username;
-            }
-          });
-          setProfilesMap(map);
-        }
-      } catch (err) {
-        console.debug('Could not prefetch profiles map:', err);
+    (async () => {
+      if (isMounted) {
+        await loadProfiles();
       }
-    }
-    loadProfiles();
+    })();
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [loadProfiles]);
 
-  // Push single notification per person (replaces existing notification from same person if present)
+  // Load Friend Requests from Supabase (and sync with localStorage fallback)
+  const loadFriendRequests = useCallback(async () => {
+    if (!username) return;
+
+    let dbRequests = [];
+    try {
+      const { data, error } = await supabase.from('friend_requests').select('*');
+      if (!error && Array.isArray(data)) {
+        dbRequests = data;
+      }
+    } catch (err) {
+      console.debug('Direct friend_requests query note:', err);
+    }
+
+    // Merge with any locally recorded requests (for instant reactivity in preview)
+    let localReqs = [];
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem('cj_friend_requests');
+        if (raw) localReqs = JSON.parse(raw);
+      } catch (e) {
+        console.debug('Local friend requests read error:', e);
+      }
+    }
+
+    // Deduplicate requests
+    const combined = [...dbRequests];
+    localReqs.forEach((lr) => {
+      const exists = combined.some(
+        (cr) =>
+          cr.id === lr.id ||
+          (cr.requester_id === lr.requester_id && cr.addressee_id === lr.addressee_id) ||
+          (cr.requester_id === lr.addressee_id && cr.addressee_id === lr.requester_id)
+      );
+      if (!exists) {
+        combined.push(lr);
+      }
+    });
+
+    setFriendRequests(combined);
+  }, [username]);
+
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      if (isMounted) {
+        await loadFriendRequests();
+      }
+    })();
+    const interval = setInterval(loadFriendRequests, 6000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [loadFriendRequests]);
+
+  // Push single notification per person
   const pushNotification = useCallback(
     (senderUsername, messageTimestamp = new Date().toISOString()) => {
       if (!senderUsername || !username) return;
@@ -155,7 +234,6 @@ export const WebSocketProvider = ({ children, session, username }) => {
           to: username,
           timestamp: messageTimestamp,
         };
-        // Keep only ONE notification per person at a time (replace old one if present)
         const otherSenders = prev.filter(
           (n) => (n.from || '').toLowerCase().trim() !== senderLower
         );
@@ -165,7 +243,7 @@ export const WebSocketProvider = ({ children, session, username }) => {
     [username]
   );
 
-  // 1. Initial and recurring message history loader from Supabase
+  // Load message history from Supabase
   const loadMessageHistory = useCallback(async () => {
     if (!username) return;
     try {
@@ -176,7 +254,6 @@ export const WebSocketProvider = ({ children, session, username }) => {
 
       let rawMessages = [];
 
-      // Query 1: Targeted .or() filter
       try {
         const { data, error } = await supabase
           .from('messages')
@@ -194,7 +271,6 @@ export const WebSocketProvider = ({ children, session, username }) => {
         console.debug('Targeted messages query attempt:', qErr);
       }
 
-      // Query 2: Fallback query all recent messages and filter client-side
       if (rawMessages.length === 0) {
         try {
           const { data: allData, error: allErr } = await supabase
@@ -236,7 +312,7 @@ export const WebSocketProvider = ({ children, session, username }) => {
     }
   }, [username, session]);
 
-  // 2. Connect WebSocket server
+  // Connect WebSocket
   const connectWebSocket = useCallback(() => {
     if (!session?.access_token || !username) return;
 
@@ -256,11 +332,13 @@ export const WebSocketProvider = ({ children, session, username }) => {
 
       ws.onopen = () => {
         console.log('⚡ Connected to WebSocket server. Sending Auth for:', username);
-        ws.send(JSON.stringify({
-          type: 'auth',
-          token: session?.access_token || 'demo-session-token',
-          username: username,
-        }));
+        ws.send(
+          JSON.stringify({
+            type: 'auth',
+            token: session?.access_token || 'demo-session-token',
+            username: username,
+          })
+        );
       };
 
       ws.onmessage = (event) => {
@@ -303,8 +381,14 @@ export const WebSocketProvider = ({ children, session, username }) => {
 
             case 'presence':
               if (Array.isArray(data.users)) {
-                setOnlineUsers(new Set(data.users.map((u) => (typeof u === 'string' ? u.toLowerCase() : u))));
+                setOnlineUsers(
+                  new Set(data.users.map((u) => (typeof u === 'string' ? u.toLowerCase() : u)))
+                );
               }
+              break;
+
+            case 'error':
+              console.warn('⚠️ Server notice/error:', data.message);
               break;
 
             default:
@@ -316,7 +400,6 @@ export const WebSocketProvider = ({ children, session, username }) => {
       };
 
       ws.onclose = () => {
-        console.log('🔌 WebSocket disconnected. Retrying in 4s...');
         setIsConnected(false);
         if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = setTimeout(async () => {
@@ -329,11 +412,6 @@ export const WebSocketProvider = ({ children, session, username }) => {
 
       ws.onerror = () => {
         setIsConnected(false);
-        try {
-          ws.close();
-        } catch (err) {
-          console.debug('WS close on error:', err);
-        }
       };
     } catch (e) {
       console.warn('WebSocket connection init exception:', e);
@@ -345,14 +423,17 @@ export const WebSocketProvider = ({ children, session, username }) => {
     connectWebSocketRef.current = connectWebSocket;
   }, [connectWebSocket]);
 
-  // 3. Setup Supabase Realtime fallback channel for instant peer synchronization
+  // Setup Supabase Realtime channel for messages and friend request updates
   useEffect(() => {
     if (!username) return;
 
-    const fetchHistory = async () => {
-      await loadMessageHistory();
-    };
-    fetchHistory();
+    let isMounted = true;
+    (async () => {
+      if (isMounted) {
+        await loadMessageHistory();
+        await loadFriendRequests();
+      }
+    })();
 
     const channel = supabase.channel(`campus-room-${username}`, {
       config: {
@@ -363,7 +444,7 @@ export const WebSocketProvider = ({ children, session, username }) => {
 
     supabaseChannelRef.current = channel;
 
-    // Add listener for direct Supabase database row insertions
+    // Listen for direct message inserts in Supabase
     channel
       .on(
         'postgres_changes',
@@ -384,15 +465,19 @@ export const WebSocketProvider = ({ children, session, username }) => {
             const newMsg = { id: row.id, from, to, content, timestamp };
             setMessages((prev) => mergeMessageList(prev, newMsg));
 
-            // If this is an incoming live message from a peer, push a single live notification
             if (toLower === userLower && fromLower !== userLower) {
               pushNotification(from, timestamp);
             }
           }
         }
-      );
-
-    channel
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'friend_requests' },
+        () => {
+          loadFriendRequests();
+        }
+      )
       .on('broadcast', { event: 'new_message' }, ({ payload }) => {
         if (!payload) return;
         const toLower = (payload.to || '').toLowerCase();
@@ -401,12 +486,13 @@ export const WebSocketProvider = ({ children, session, username }) => {
 
         if (toLower === userLower) {
           setMessages((prev) => mergeMessageList(prev, payload));
-
-          // Add single notification per person
           if (fromLower !== userLower) {
             pushNotification(payload.from, payload.timestamp);
           }
         }
+      })
+      .on('broadcast', { event: 'friend_request_sync' }, () => {
+        loadFriendRequests();
       })
       .on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState();
@@ -421,11 +507,12 @@ export const WebSocketProvider = ({ children, session, username }) => {
       });
 
     return () => {
+      isMounted = false;
       supabase.removeChannel(channel);
     };
-  }, [username, loadMessageHistory, pushNotification]);
+  }, [username, loadMessageHistory, loadFriendRequests, pushNotification]);
 
-  // Recurring background sync for Supabase message history
+  // Recurring background sync for messages
   useEffect(() => {
     if (!username) return;
     const interval = setInterval(() => {
@@ -436,10 +523,20 @@ export const WebSocketProvider = ({ children, session, username }) => {
 
   useEffect(() => {
     if (session && username) {
-      const initSocket = () => {
+      const timer = setTimeout(() => {
         connectWebSocket();
+      }, 0);
+      return () => {
+        clearTimeout(timer);
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        if (socketRef.current) {
+          try {
+            socketRef.current.close();
+          } catch (err) {
+            console.debug('Socket close on unmount:', err);
+          }
+        }
       };
-      initSocket();
     }
 
     return () => {
@@ -454,7 +551,241 @@ export const WebSocketProvider = ({ children, session, username }) => {
     };
   }, [session, username, connectWebSocket]);
 
-  // 4. Robust Send Message
+  // Helper to persist friend requests locally
+  const syncFriendRequestsState = (updatedList) => {
+    setFriendRequests(updatedList);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('cj_friend_requests', JSON.stringify(updatedList));
+      } catch (e) {
+        console.debug('Error caching friend requests:', e);
+      }
+    }
+  };
+
+  // Resolve user identifiers for current user and any target
+  const myResolvedId = useMemo(() => {
+    if (currentUserId) return currentUserId;
+    if (session?.user?.id) return session.user.id;
+    const myP = profilesList.find((p) => p.username?.toLowerCase() === username?.toLowerCase());
+    return myP?.id || `user_${username?.toLowerCase()}`;
+  }, [currentUserId, session, profilesList, username]);
+
+  /**
+   * Bidirectional Relationship Status Computation
+   * Checks both directions:
+   * ((requester = me AND addressee = target) OR (requester = target AND addressee = me))
+   */
+  const getRelationshipWithUser = useCallback(
+    (target) => {
+      if (!target || !username) return { status: 'none' };
+
+      const targetUsername = typeof target === 'string' ? target : target.username;
+      const targetId =
+        typeof target === 'object' && target.id
+          ? target.id
+          : profilesList.find((p) => p.username?.toLowerCase() === targetUsername?.toLowerCase())?.id ||
+            `user_${targetUsername?.toLowerCase()}`;
+
+      const myId = myResolvedId;
+      const myUserLower = username.toLowerCase().trim();
+      const targetUserLower = targetUsername.toLowerCase().trim();
+
+      if (myUserLower === targetUserLower) {
+        return { status: 'self' };
+      }
+
+      // Check all friend requests bidirectionally
+      const match = friendRequests.find((req) => {
+        const reqReqId = String(req.requester_id || req.requester_username || '').toLowerCase();
+        const reqAddId = String(req.addressee_id || req.addressee_username || '').toLowerCase();
+        const strMyId = String(myId).toLowerCase();
+        const strTargetId = String(targetId).toLowerCase();
+
+        const matchDirect =
+          (reqReqId === strMyId || reqReqId === myUserLower) &&
+          (reqAddId === strTargetId || reqAddId === targetUserLower);
+
+        const matchReverse =
+          (reqReqId === strTargetId || reqReqId === targetUserLower) &&
+          (reqAddId === strMyId || reqAddId === myUserLower);
+
+        return matchDirect || matchReverse;
+      });
+
+      if (!match) {
+        return { status: 'none' };
+      }
+
+      if (match.status === 'accepted') {
+        return { status: 'accepted', request: match };
+      }
+
+      if (match.status === 'pending') {
+        const reqReqId = String(match.requester_id || match.requester_username || '').toLowerCase();
+        const isSender = reqReqId === String(myId).toLowerCase() || reqReqId === myUserLower;
+        if (isSender) {
+          return { status: 'sent', request: match };
+        } else {
+          return { status: 'received', request: match };
+        }
+      }
+
+      return { status: 'none' };
+    },
+    [username, myResolvedId, profilesList, friendRequests]
+  );
+
+  /**
+   * Action 1: Send Friend Request (A -> B)
+   * Inserts row with status = 'pending'
+   */
+  const sendFriendRequest = async (target) => {
+    if (!target || !username) return { success: false, error: 'Invalid target' };
+
+    const targetUsername = typeof target === 'string' ? target : target.username;
+    const targetUser =
+      typeof target === 'object' && target.id
+        ? target
+        : profilesList.find((p) => p.username?.toLowerCase() === targetUsername?.toLowerCase()) || {
+            id: `user_${targetUsername?.toLowerCase()}`,
+            username: targetUsername,
+          };
+
+    const myId = myResolvedId;
+    const targetId = targetUser.id;
+
+    // Check if an existing relationship already exists in either direction
+    const existing = getRelationshipWithUser(targetUser);
+    if (existing.status !== 'none') {
+      return { success: false, error: `Relationship already exists (${existing.status})` };
+    }
+
+    const newRequest = {
+      id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      requester_id: myId,
+      requester_username: username,
+      addressee_id: targetId,
+      addressee_username: targetUsername,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+
+    // Optimistically add to state
+    const nextList = [...friendRequests, newRequest];
+    syncFriendRequestsState(nextList);
+
+    // Persist to Supabase friend_requests table
+    try {
+      const { data, error } = await supabase
+        .from('friend_requests')
+        .insert({
+          requester_id: myId,
+          addressee_id: targetId,
+          status: 'pending',
+        })
+        .select()
+        .maybeSingle();
+
+      if (!error && data) {
+        const updated = nextList.map((r) => (r.id === newRequest.id ? { ...r, id: data.id } : r));
+        syncFriendRequestsState(updated);
+      }
+    } catch (err) {
+      console.debug('Supabase friend request insert note:', err);
+    }
+
+    // Broadcast sync event to peer
+    if (supabaseChannelRef.current) {
+      supabaseChannelRef.current.send({
+        type: 'broadcast',
+        event: 'friend_request_sync',
+        payload: { type: 'request_sent', from: username, to: targetUsername },
+      });
+    }
+
+    return { success: true };
+  };
+
+  /**
+   * Action 2: Accept Friend Request (B accepts A's request)
+   * Updates row's status to 'accepted'
+   */
+  const acceptFriendRequest = async (requestId) => {
+    if (!requestId) return { success: false };
+
+    // Update in local state
+    const nextList = friendRequests.map((r) =>
+      String(r.id) === String(requestId) ? { ...r, status: 'accepted' } : r
+    );
+    syncFriendRequestsState(nextList);
+
+    // Update in Supabase
+    try {
+      await supabase
+        .from('friend_requests')
+        .update({ status: 'accepted' })
+        .eq('id', requestId);
+    } catch (err) {
+      console.debug('Supabase friend request accept error:', err);
+    }
+
+    // Broadcast sync event
+    if (supabaseChannelRef.current) {
+      supabaseChannelRef.current.send({
+        type: 'broadcast',
+        event: 'friend_request_sync',
+        payload: { type: 'request_accepted', id: requestId },
+      });
+    }
+
+    return { success: true };
+  };
+
+  /**
+   * Action 3: Decline Friend Request (B declines A's request)
+   * Deletes the row entirely — allowing future re-requests
+   */
+  const declineFriendRequest = async (requestId) => {
+    if (!requestId) return { success: false };
+
+    // Remove entirely from local state
+    const nextList = friendRequests.filter((r) => String(r.id) !== String(requestId));
+    syncFriendRequestsState(nextList);
+
+    // Delete row from Supabase
+    try {
+      await supabase.from('friend_requests').delete().eq('id', requestId);
+    } catch (err) {
+      console.debug('Supabase friend request delete error:', err);
+    }
+
+    // Broadcast sync event
+    if (supabaseChannelRef.current) {
+      supabaseChannelRef.current.send({
+        type: 'broadcast',
+        event: 'friend_request_sync',
+        payload: { type: 'request_declined', id: requestId },
+      });
+    }
+
+    return { success: true };
+  };
+
+  // Get all pending incoming friend requests for the current user
+  const incomingFriendRequests = useMemo(() => {
+    if (!username) return [];
+    const myId = String(myResolvedId).toLowerCase();
+    const myUserLower = username.toLowerCase().trim();
+
+    return friendRequests.filter((req) => {
+      if (req.status !== 'pending') return false;
+      const addId = String(req.addressee_id || req.addressee_username || '').toLowerCase();
+      return addId === myId || addId === myUserLower;
+    });
+  }, [friendRequests, username, myResolvedId]);
+
+  // Robust Send Message
   const sendMessage = async (toUsername, content) => {
     if (!content || !toUsername || !username) return false;
 
@@ -471,7 +802,7 @@ export const WebSocketProvider = ({ children, session, username }) => {
     // Optimistically update local message state with tempId
     setMessages((prev) => mergeMessageList(prev, newMsg));
 
-    // 1) Send via WebSocket (which automatically saves to Supabase via server trusted client & acks)
+    // 1) Send via WebSocket (which enforces server-side friendship check, saves to Supabase & acks)
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(
         JSON.stringify({
@@ -483,7 +814,7 @@ export const WebSocketProvider = ({ children, session, username }) => {
       );
     }
 
-    // 2) Also attempt direct client-side Supabase insert as an extra resilience guarantee
+    // 2) Client-side persistence attempt
     let officialId = null;
     try {
       const { data: inserted, error } = await supabase
@@ -527,13 +858,16 @@ export const WebSocketProvider = ({ children, session, username }) => {
     return true;
   };
 
-  // 5. Dismiss a single notification (Mark as viewed / Completed reading)
-  const dismissNotification = useCallback((id) => {
-    saveDismissedNotificationId(id);
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
-  }, [saveDismissedNotificationId]);
+  // Dismiss a single notification
+  const dismissNotification = useCallback(
+    (id) => {
+      saveDismissedNotificationId(id);
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    },
+    [saveDismissedNotificationId]
+  );
 
-  // 6. Dismiss all notifications (Mark all as viewed)
+  // Dismiss all notifications
   const markAllNotificationsAsViewed = useCallback(() => {
     if (typeof window !== 'undefined' && username) {
       try {
@@ -559,10 +893,19 @@ export const WebSocketProvider = ({ children, session, username }) => {
         onlineUsers,
         setMessages,
         notifications,
-        unreadCount: notifications.length,
+        unreadCount: notifications.length + incomingFriendRequests.length,
         dismissNotification,
         markAllNotificationsAsViewed,
         profilesMap,
+        profilesList,
+        loadProfiles,
+        friendRequests,
+        incomingFriendRequests,
+        getRelationshipWithUser,
+        sendFriendRequest,
+        acceptFriendRequest,
+        declineFriendRequest,
+        currentUserId: myResolvedId,
       }}
     >
       {children}

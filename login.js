@@ -53,6 +53,17 @@ async function main() {
     }
   }
 
+  function getCollegeFromEmail(userEmail) {
+    if (!userEmail) return 'Islington College Kathmandu';
+    const clean = userEmail.trim().toLowerCase();
+    if (clean.endsWith('@islingtoncollege.edu.np')) return 'Islington College Kathmandu';
+    if (clean.endsWith('@heraldcollege.edu.np')) return 'Herald College Kathmandu';
+    if (clean.endsWith('@softwarica.edu.np')) return 'Softwarica College Kathmandu';
+    return 'Islington College Kathmandu';
+  }
+
+  const derivedCollege = getCollegeFromEmail(email);
+
   ({ data, error } = await supabase.auth.signUp({
     email,
     password,
@@ -60,6 +71,8 @@ async function main() {
       data: {
         username,
         full_name: fullName,
+        college: derivedCollege,
+        university: derivedCollege,
       },
     },
   }));
@@ -79,6 +92,7 @@ async function main() {
         email: data.user.email,
         username,
         full_name: fullName || null,
+        college: derivedCollege,
       }, { onConflict: 'id' });
 
     if (profileError) {

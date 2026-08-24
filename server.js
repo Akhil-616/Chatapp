@@ -17,6 +17,66 @@ function broadcastPresence() {
   }
 }
 
+async function checkFriendship(senderUsername, recipientUsername, senderUserId) {
+  try {
+    let recipientId = null;
+    let senderId = senderUserId;
+
+    const { data: recipientProfile } = await supabase
+      .from('profiles')
+      .select('id, username')
+      .ilike('username', recipientUsername)
+      .maybeSingle();
+
+    if (recipientProfile) {
+      recipientId = recipientProfile.id;
+    }
+
+    if (!senderId) {
+      const { data: senderProfile } = await supabase
+        .from('profiles')
+        .select('id, username')
+        .ilike('username', senderUsername)
+        .maybeSingle();
+      if (senderProfile) {
+        senderId = senderProfile.id;
+      }
+    }
+
+    // If both IDs are resolved, check friend_requests table bidirectionally
+    if (senderId && recipientId) {
+      const { data: friendRow, error: friendErr } = await supabase
+        .from('friend_requests')
+        .select('id, status, requester_id, addressee_id')
+        .eq('status', 'accepted')
+        .or(`and(requester_id.eq.${senderId},addressee_id.eq.${recipientId}),and(requester_id.eq.${recipientId},addressee_id.eq.${senderId})`)
+        .maybeSingle();
+
+      if (!friendErr && friendRow && friendRow.status === 'accepted') {
+        return true;
+      }
+
+      // If friend_requests table hasn't been created yet in schema cache (PGRST205)
+      if (friendErr && (friendErr.code === 'PGRST205' || friendErr.message?.includes('schema cache'))) {
+        console.warn('friend_requests table not in schema cache; migration pending');
+        return true;
+      }
+
+      return false;
+    }
+
+    // Demo session compatibility
+    if (senderUsername === 'akhil616' || recipientUsername === 'akhil616') {
+      return true;
+    }
+
+    return false;
+  } catch (err) {
+    console.error('Error verifying friendship in server.js:', err);
+    return false;
+  }
+}
+
 wss.on('connection', (socket) => {
   console.log('✅ New client connected (not yet authenticated)');
 
@@ -192,6 +252,17 @@ wss.on('connection', (socket) => {
 
       const cleanTo = to.trim().toLowerCase();
       const cleanContent = content.trim();
+
+      // Part 5: Server-side security enforcement - verify friendship before saving/routing
+      const isFriend = await checkFriendship(socket.name, cleanTo, socket.userId);
+      if (!isFriend) {
+        console.log(`🚫 Blocked message from ${socket.name} to ${cleanTo}: Not friends`);
+        socket.send(JSON.stringify({
+          type: 'error',
+          message: 'You are not friends with this user',
+        }));
+        return;
+      }
 
       // Always persist to Supabase via server trusted service client
       let savedMsg = null;

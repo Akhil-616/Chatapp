@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
+import { getCollegeFromEmail } from '../lib/collegeUtils';
 import { X, Mail, Lock, User, AtSign, ArrowRight } from 'lucide-react';
 
 export default function AuthModal({ isOpen, onClose, initialMode = 'login', onAuthSuccess }) {
@@ -95,6 +96,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'login', onAu
       // 2. Perform Supabase Auth Sign Up with metadata for the DB trigger
       const cleanUsername = username.trim().toLowerCase();
       const cleanFullName = fullName.trim();
+      const derivedCollege = getCollegeFromEmail(cleanEmail);
 
       const redirectUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
 
@@ -106,7 +108,8 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'login', onAu
           data: {
             full_name: cleanFullName,
             username: cleanUsername,
-            university: 'Islington College Kathmandu',
+            college: derivedCollege,
+            university: derivedCollege,
             bio: '',
           },
         },
@@ -135,6 +138,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'login', onAu
               email: authData.user.email,
               username: cleanUsername,
               full_name: cleanFullName || null,
+              college: derivedCollege,
             }, { onConflict: 'id' });
         } catch (syncErr) {
           console.log('Database trigger handled profile creation:', syncErr);

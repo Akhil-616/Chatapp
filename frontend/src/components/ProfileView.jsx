@@ -1,13 +1,18 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
-import { Loader2, Check, AlertCircle, User, AtSign, School, FileText } from 'lucide-react';
+import { GENDER_OPTIONS, getCollegeFromEmail } from '../lib/collegeUtils';
+import { Loader2, Check, AlertCircle, User, AtSign, School, FileText, Lock, BookOpen, Layers } from 'lucide-react';
 
 export default function ProfileView({ userProfile, email, onLogout, onProfileUpdate }) {
   const [fullName, setFullName] = useState(userProfile?.full_name || '');
   const [bio, setBio] = useState(userProfile?.bio || '');
-  const [university, setUniversity] = useState(
-    userProfile?.university || 'Islington College Kathmandu'
-  );
+  const [gender, setGender] = useState(userProfile?.gender || '');
+  const [section, setSection] = useState(userProfile?.section || '');
+  const [faculty, setFaculty] = useState(userProfile?.faculty || '');
+  
+  // College is strictly derived from the verified email domain and is read-only
+  const derivedCollege = userProfile?.college || getCollegeFromEmail(email || userProfile?.email);
+
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -28,21 +33,26 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
     setSaved(false);
 
     try {
-      const cleanFullName = fullName.trim();
-      const cleanBio = bio.slice(0, 60).trim();
-      const cleanUniversity = university.trim() || 'Islington College Kathmandu';
+      const cleanFullName = fullName.trim() || null;
+      const cleanBio = bio.slice(0, 60).trim() || null;
+      const cleanGender = gender.trim() || null;
+      const cleanSection = section.trim() || null;
+      const cleanFaculty = faculty.trim() || null;
 
-      // 1. Save in Supabase Auth user_metadata (always present and supported for all Supabase accounts)
+      // 1. Update Supabase Auth user_metadata
       try {
         await supabase.auth.updateUser({
           data: {
             full_name: cleanFullName,
-            university: cleanUniversity,
+            college: derivedCollege,
+            gender: cleanGender,
+            section: cleanSection,
+            faculty: cleanFaculty,
             bio: cleanBio,
           },
         });
       } catch (authMetaErr) {
-        console.debug('Auth metadata update info:', authMetaErr);
+        console.debug('Auth metadata update note:', authMetaErr);
       }
 
       // 2. Update profiles row in Supabase database
@@ -50,19 +60,22 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
       const currentUserId = authData?.user?.id || userProfile?.id;
 
       if (currentUserId) {
-        // Attempt full update; if custom columns (university/bio) don't exist yet, fallback to full_name
         try {
-          const { error: fullUpdateErr } = await supabase
+          const { error: dbErr } = await supabase
             .from('profiles')
             .update({
               full_name: cleanFullName,
-              university: cleanUniversity,
+              college: derivedCollege,
+              gender: cleanGender,
+              section: cleanSection,
+              faculty: cleanFaculty,
               bio: cleanBio,
             })
             .eq('id', currentUserId);
 
-          if (fullUpdateErr) {
-            // Fallback: standard profile columns
+          if (dbErr) {
+            console.debug('Direct full column update failed, attempting standard columns:', dbErr.message);
+            // Fallback for base columns if extended columns are not yet provisioned
             await supabase
               .from('profiles')
               .update({
@@ -71,25 +84,31 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
               .eq('id', currentUserId);
           }
         } catch (dbErr) {
-          console.debug('Profiles table update:', dbErr);
+          console.debug('Profiles table update exception:', dbErr);
         }
       }
 
-      // 3. Persist locally for immediate UI responsiveness
+      // 3. Persist locally for instant responsive state updates
       const updatedData = {
         ...userProfile,
-        full_name: cleanFullName,
-        university: cleanUniversity,
-        bio: cleanBio,
+        full_name: cleanFullName || '',
+        college: derivedCollege,
+        gender: cleanGender || '',
+        section: cleanSection || '',
+        faculty: cleanFaculty || '',
+        bio: cleanBio || '',
       };
 
       if (typeof window !== 'undefined' && userProfile?.username) {
         localStorage.setItem(
           `cj_profile_${userProfile.username.toLowerCase()}`,
           JSON.stringify({
-            university: cleanUniversity,
-            bio: cleanBio,
-            full_name: cleanFullName,
+            full_name: cleanFullName || '',
+            college: derivedCollege,
+            gender: cleanGender || '',
+            section: cleanSection || '',
+            faculty: cleanFaculty || '',
+            bio: cleanBio || '',
           })
         );
       }
@@ -116,150 +135,208 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
         <div className="mb-8">
           <h1 className="text-3xl font-['Space_Grotesk'] font-extrabold tracking-tight text-[#17140F]">Student Profile</h1>
           <p className="text-sm text-[#6B6355] mt-1">
-            Manage your Islington College academic identity, bio, and public handle.
+            Manage your academic identity, circle details, and public profile.
           </p>
         </div>
 
         <div className="bg-[#FFFCF5] border border-[rgba(23,20,15,0.1)] rounded-3xl p-7 shadow-xs space-y-6">
-        {/* User Header Card */}
-        <div className="flex items-center space-x-4 pb-5 border-b border-[rgba(23,20,15,0.08)]">
-          <div className="w-14 h-14 rounded-2xl bg-[#17140F] text-[#FFFCF5] font-['Space_Grotesk'] font-bold flex items-center justify-center text-lg shadow-xs">
-            {getInitials(fullName, userProfile?.username)}
-          </div>
-          <div>
-            <h3 className="font-['Space_Grotesk'] font-bold text-xl text-[#17140F]">
-              {displayName}
-            </h3>
-            <p className="text-xs text-[#6B6355] flex items-center space-x-2 mt-0.5">
-              <span className="font-['Space_Mono'] text-[#17140F]">@{userProfile?.username || 'username'}</span>
-              <span>•</span>
-              <span className="text-[#8A8275]">{email}</span>
-            </p>
-            <p className="text-[11px] font-['Space_Mono'] text-[#1B6C5D] font-bold mt-1">
-              {university || 'Islington College Kathmandu'}
-            </p>
-          </div>
-        </div>
-
-        {/* Feedback Alerts */}
-        {errorMsg && (
-          <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs flex items-center space-x-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
-
-        {saved && (
-          <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs flex items-center space-x-2">
-            <Check className="w-4 h-4 shrink-0 text-emerald-600" />
-            <span>Profile successfully updated!</span>
-          </div>
-        )}
-
-        {/* Edit Form */}
-        <form onSubmit={handleSaveProfile} className="space-y-4">
-          {/* Full Name Field */}
-          <div>
-            <label className="block text-xs font-['Space_Grotesk'] font-bold text-[#17140F] mb-1.5 flex items-center space-x-1.5">
-              <User className="w-3.5 h-3.5 text-[#1B6C5D]" />
-              <span>Full Name</span>
-            </label>
-            <input
-              type="text"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="e.g. Akhil Bhandari"
-              className="w-full bg-[#FAF6ED] border border-[rgba(23,20,15,0.14)] rounded-xl px-4 py-2.5 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] transition"
-            />
-            <p className="text-[11px] text-[#8A8275] mt-1">
-              Your display name shown to peers across directory cards and conversations.
-            </p>
-          </div>
-
-          {/* Username Handle (Read-only) */}
-          <div>
-            <label className="block text-xs font-['Space_Grotesk'] font-bold text-[#17140F] mb-1.5 flex items-center space-x-1.5">
-              <AtSign className="w-3.5 h-3.5 text-[#1B6C5D]" />
-              <span>Username Handle</span>
-            </label>
-            <input
-              type="text"
-              disabled
-              value={userProfile?.username || ''}
-              className="w-full bg-[#F2ECDE]/70 border border-[rgba(23,20,15,0.1)] rounded-xl px-4 py-2.5 text-sm text-[#6B6355] cursor-not-allowed font-['Space_Mono']"
-            />
-            <p className="text-[11px] text-[#8A8275] mt-1">
-              Unique network handle used for peer routing and direct messages.
-            </p>
-          </div>
-
-          {/* University Affiliation (Auto-filled to Islington College Kathmandu) */}
-          <div>
-            <label className="block text-xs font-['Space_Grotesk'] font-bold text-[#17140F] mb-1.5 flex items-center space-x-1.5">
-              <School className="w-3.5 h-3.5 text-[#1B6C5D]" />
-              <span>University Affiliation</span>
-            </label>
-            <input
-              type="text"
-              value={university}
-              onChange={(e) => setUniversity(e.target.value)}
-              placeholder="Islington College Kathmandu"
-              className="w-full bg-[#FAF6ED] border border-[rgba(23,20,15,0.14)] rounded-xl px-4 py-2.5 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] transition"
-            />
-            <p className="text-[11px] text-[#1B6C5D] font-['Space_Mono'] mt-1">
-              Auto-verified campus: Islington College Kathmandu
-            </p>
-          </div>
-
-          {/* Academic Bio with 60 letter limit */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-['Space_Grotesk'] font-bold text-[#17140F] flex items-center space-x-1.5">
-                <FileText className="w-3.5 h-3.5 text-[#1B6C5D]" />
-                <span>Academic Bio</span>
-              </label>
-              <span
-                className={`text-[11px] font-['Space_Mono'] ${
-                  bio.length >= 60 ? 'text-red-600 font-bold' : 'text-[#8A8275]'
-                }`}
-              >
-                {bio.length}/60 letters
-              </span>
+          {/* User Header Card */}
+          <div className="flex items-center space-x-4 pb-5 border-b border-[rgba(23,20,15,0.08)]">
+            <div className="w-14 h-14 rounded-2xl bg-[#17140F] text-[#FFFCF5] font-['Space_Grotesk'] font-bold flex items-center justify-center text-lg shadow-xs">
+              {getInitials(fullName, userProfile?.username)}
             </div>
-            <textarea
-              rows={2}
-              maxLength={60}
-              value={bio}
-              onChange={(e) => setBio(e.target.value.slice(0, 60))}
-              placeholder="Add your bio (e.g. Computing student, Web dev enthusiast)..."
-              className="w-full bg-[#FAF6ED] border border-[rgba(23,20,15,0.14)] rounded-xl px-4 py-2.5 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] transition resize-none"
-            />
-            <p className="text-[11px] text-[#8A8275] mt-1">
-              Short bio visible to fellow students (strictly limited to 60 characters).
-            </p>
+            <div>
+              <h3 className="font-['Space_Grotesk'] font-bold text-xl text-[#17140F]">
+                {displayName}
+              </h3>
+              <p className="text-xs text-[#6B6355] flex items-center space-x-2 mt-0.5">
+                <span className="font-['Space_Mono'] text-[#17140F]">@{userProfile?.username || 'username'}</span>
+                <span>•</span>
+                <span className="text-[#8A8275]">{email || userProfile?.email}</span>
+              </p>
+              <p className="text-[11px] font-['Space_Mono'] text-[#1B6C5D] font-bold mt-1">
+                {derivedCollege}
+              </p>
+            </div>
           </div>
 
-          {/* Actions */}
-          <div className="flex items-center space-x-3 pt-3">
-            <button
-              type="submit"
-              disabled={saving}
-              className="bg-[#17140F] text-[#FFFCF5] font-['Space_Grotesk'] font-bold text-xs px-5 py-3 rounded-xl hover:bg-[#2b2519] transition flex items-center space-x-2 disabled:opacity-50 shadow-xs cursor-pointer"
-            >
-              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              <span>{saving ? 'Saving...' : saved ? 'Saved!' : 'Save Profile'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={onLogout}
-              className="bg-red-50 text-red-700 border border-red-200 font-['Space_Grotesk'] font-bold text-xs px-5 py-3 rounded-xl hover:bg-red-100 transition cursor-pointer"
-            >
-              Log Out
-            </button>
-          </div>
-        </form>
+          {/* Feedback Alerts */}
+          {errorMsg && (
+            <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs flex items-center space-x-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {saved && (
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs flex items-center space-x-2">
+              <Check className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>Profile successfully updated!</span>
+            </div>
+          )}
+
+          {/* Edit Form */}
+          <form onSubmit={handleSaveProfile} className="space-y-4">
+            {/* Full Name Field */}
+            <div>
+              <label className="block text-xs font-['Space_Grotesk'] font-bold text-[#17140F] mb-1.5 flex items-center space-x-1.5">
+                <User className="w-3.5 h-3.5 text-[#1B6C5D]" />
+                <span>Full Name</span>
+              </label>
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="e.g. Akhil Bhandari"
+                className="w-full bg-[#FAF6ED] border border-[rgba(23,20,15,0.14)] rounded-xl px-4 py-2.5 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] transition"
+              />
+              <p className="text-[11px] text-[#8A8275] mt-1">
+                Your display name shown to peers across directory cards and conversations.
+              </p>
+            </div>
+
+            {/* Username Handle (Read-only) */}
+            <div>
+              <label className="block text-xs font-['Space_Grotesk'] font-bold text-[#17140F] mb-1.5 flex items-center space-x-1.5">
+                <AtSign className="w-3.5 h-3.5 text-[#1B6C5D]" />
+                <span>Username Handle</span>
+              </label>
+              <input
+                type="text"
+                disabled
+                value={userProfile?.username || ''}
+                className="w-full bg-[#F2ECDE]/70 border border-[rgba(23,20,15,0.1)] rounded-xl px-4 py-2.5 text-sm text-[#6B6355] cursor-not-allowed font-['Space_Mono']"
+              />
+              <p className="text-[11px] text-[#8A8275] mt-1">
+                Unique network handle used for peer routing and direct messages.
+              </p>
+            </div>
+
+            {/* College Affiliation (Strictly Read-Only, Derived from email) */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-['Space_Grotesk'] font-bold text-[#17140F] flex items-center space-x-1.5">
+                  <School className="w-3.5 h-3.5 text-[#1B6C5D]" />
+                  <span>College Affiliation</span>
+                </label>
+                <span className="inline-flex items-center space-x-1 text-[10px] font-['Space_Mono'] text-[#6B6355] bg-[#FAF6ED] px-2 py-0.5 rounded border border-[rgba(23,20,15,0.08)]">
+                  <Lock className="w-3 h-3 text-[#8A8275]" />
+                  <span>Read-only</span>
+                </span>
+              </div>
+              <input
+                type="text"
+                disabled
+                value={derivedCollege}
+                className="w-full bg-[#F2ECDE]/70 border border-[rgba(23,20,15,0.1)] rounded-xl px-4 py-2.5 text-sm text-[#6B6355] cursor-not-allowed font-medium"
+              />
+              <p className="text-[11px] text-[#1B6C5D] font-['Space_Mono'] mt-1 flex items-center space-x-1">
+                <span>Verified college derived automatically from your institutional email domain.</span>
+              </p>
+            </div>
+
+            {/* Faculty & Section in a 2-column grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Faculty */}
+              <div>
+                <label className="block text-xs font-['Space_Grotesk'] font-bold text-[#17140F] mb-1.5 flex items-center space-x-1.5">
+                  <BookOpen className="w-3.5 h-3.5 text-[#1B6C5D]" />
+                  <span>Faculty (Optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={faculty}
+                  onChange={(e) => setFaculty(e.target.value)}
+                  placeholder="e.g. BSc (Hons) Computing"
+                  className="w-full bg-[#FAF6ED] border border-[rgba(23,20,15,0.14)] rounded-xl px-4 py-2.5 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] transition"
+                />
+              </div>
+
+              {/* Section */}
+              <div>
+                <label className="block text-xs font-['Space_Grotesk'] font-bold text-[#17140F] mb-1.5 flex items-center space-x-1.5">
+                  <Layers className="w-3.5 h-3.5 text-[#1B6C5D]" />
+                  <span>Section (Optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={section}
+                  onChange={(e) => setSection(e.target.value)}
+                  placeholder="e.g. Section A, L5C1"
+                  className="w-full bg-[#FAF6ED] border border-[rgba(23,20,15,0.14)] rounded-xl px-4 py-2.5 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] transition"
+                />
+              </div>
+            </div>
+
+            {/* Gender Selection (Fixed Set: Male, Female, Other, Prefer not to say) */}
+            <div>
+              <label className="block text-xs font-['Space_Grotesk'] font-bold text-[#17140F] mb-1.5 flex items-center space-x-1.5">
+                <User className="w-3.5 h-3.5 text-[#1B6C5D]" />
+                <span>Gender (Optional)</span>
+              </label>
+              <select
+                value={gender}
+                onChange={(e) => setGender(e.target.value)}
+                className="w-full bg-[#FAF6ED] border border-[rgba(23,20,15,0.14)] rounded-xl px-4 py-2.5 text-sm text-[#17140F] focus:outline-none focus:border-[#17140F] transition cursor-pointer"
+              >
+                <option value="">Select gender (optional)</option>
+                {GENDER_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Academic Bio with 60 character limit */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-['Space_Grotesk'] font-bold text-[#17140F] flex items-center space-x-1.5">
+                  <FileText className="w-3.5 h-3.5 text-[#1B6C5D]" />
+                  <span>Academic Bio</span>
+                </label>
+                <span
+                  className={`text-[11px] font-['Space_Mono'] ${
+                    bio.length >= 60 ? 'text-red-600 font-bold' : 'text-[#8A8275]'
+                  }`}
+                >
+                  {bio.length}/60 letters
+                </span>
+              </div>
+              <textarea
+                rows={2}
+                maxLength={60}
+                value={bio}
+                onChange={(e) => setBio(e.target.value.slice(0, 60))}
+                placeholder="Add your bio (e.g. Computing student, Web dev enthusiast)..."
+                className="w-full bg-[#FAF6ED] border border-[rgba(23,20,15,0.14)] rounded-xl px-4 py-2.5 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] transition resize-none"
+              />
+              <p className="text-[11px] text-[#8A8275] mt-1">
+                Short bio visible to fellow students (strictly limited to 60 characters).
+              </p>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center space-x-3 pt-3">
+              <button
+                type="submit"
+                disabled={saving}
+                className="bg-[#17140F] text-[#FFFCF5] font-['Space_Grotesk'] font-bold text-xs px-5 py-3 rounded-xl hover:bg-[#2b2519] transition flex items-center space-x-2 disabled:opacity-50 shadow-xs cursor-pointer"
+              >
+                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{saving ? 'Saving...' : saved ? 'Saved!' : 'Save Profile'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={onLogout}
+                className="bg-red-50 text-red-700 border border-red-200 font-['Space_Grotesk'] font-bold text-xs px-5 py-3 rounded-xl hover:bg-red-100 transition cursor-pointer"
+              >
+                Log Out
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
 }
