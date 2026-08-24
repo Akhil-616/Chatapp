@@ -1,0 +1,34 @@
+Student Information:
+-------------------------------------------------
+| Name                     |    ID    | Section |
+-------------------------------------------------
+| Akhil Bhandari           | 25029555 |   AI7	|
+| Srijan Budhathoki	   | 	      |   AI7	|
+| Tenzing Legden Sherpa    | 	      |   AI7	|
+| Disijan Thapa		   | 	      |   AI7   |
+| Sudesh Malla 		   | 	      |   AI7	|	 
+-------------------------------------------------
+
+Project Summary
+
+Connectjutti is a web chat that allows users to message to each other. It is a chat system that delivers message when user is connected to the server. Connectjutti is especially built for college students to build network. Rather than personal information, user will upload the academic information along with the valuable skill. With this, people can be connected with like minded people who are running on same path like they are and share their academic interest. The webchat has a friend request mechanism that will allow user to make decision weather to connect to a particular person or not. Users can filter not only by name but also by skills. The website has a page where you can customize your profile. For now, this site is only for the Islington's student.
+
+Technologies/Tools used
+
+Node.js - a JS runtime environment to build and run the backend of the website.
+React.js - a JS library to build the frontend of the site.
+HTML & CSS - Used to define website's structure and different styles.
+JavaScript (JS) - main scripting language used in developing the system.
+Supabase - used as a cloud database for storing User's information, messages and skills.
+Vercel - to host the frontend of the website
+Render- to host the backend of the website
+Claude and AI Studio - as a coding agents to assist and debug codes.
+Figma - Used to make a layout of Frontend.
+Git and GitHub: Used for version control and to store the version controlled files in cloud for different kind of automatic actions.
+Google's SMTP : Used as a protocol to send conformation email.
+
+Unique Selling point of the project.
+
+Since the website is built to make real connections inside the same university boundaries, its best selling point is that it is for students only website, only for students of Islington College for now, where they can find the like minded people working in same interest as they are and can connect quickly. It's skill filtration mechanism allows user to find the topic that is either interesting, currently working or just a beginner at it and people can chat with the another person with same skill set for collaboration, assistance or any guidance. Not only online, we can also meet personally to the person as the website is confined to certain area only. Unlike other platform, you cannot send message request to any random person. Also no one can make a bot account to message to other user because we enforced the strict college mail rule.
+
+In summary, this web chat system is made so that students having valuable skills can make a network inside the college premises not just in online platform where one person is thousand mile away.
