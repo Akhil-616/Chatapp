@@ -23,6 +23,7 @@ This document outlines all vulnerabilities, bugs, structural issues identified i
 | **Dev Server Boot** | Root `package.json` had no `dev`/`build` scripts, and Vite did not bind to `0.0.0.0:3000`. | **High (Dev Blocker)** | Added proxy scripts to root `package.json` and configured Vite host & port. |
 | **Friend System & Direct Messaging** | Users could message any student without prior authorization; missing friend requests table and bidirectional permission checks. | **High** | Built a complete Friend Request system (`friend_requests` table, `pending` / `accepted` states, decline deletion), relationship-aware Directory actions, notifications feed, and server-side WebSocket messaging authorization. |
 | **Extended Profiles & Verified College** | Profile lacked fields for gender, section, and faculty; college affiliation was not tied to the student's institutional email domain. | **Medium** | Added `gender` (options dropdown), `section`, `faculty`, and 60-char `bio` limits. College affiliation is strictly derived from verified email domain (`@islingtoncollege.edu.np`) and rendered read-only. |
+| **Skills System & Bio Deprecation** | Free-text `bio` was unstructured and didn't support discovery by technical abilities; lack of skill tagging in profiles and directory. | **Medium / High** | Replaced `bio` with an admin-curated Skill Tagging system (`skills` and `profile_skills` tables). Built instant-save toggle pills in `ProfileView`, skill badges on Directory cards, and multi-select match-any (OR) skill filtering in `DirectoryView`. |
 
 ---
 
@@ -417,6 +418,57 @@ The friend system ensures privacy by requiring mutual consent before two student
 4. **Chat & Security Authorization**:
    - Once the status is `'accepted'`, the button on both students' Directory cards changes to **Message**, allowing either peer to start a chat thread immediately.
    - In `server.js`, whenever a student sends a direct message over the WebSocket connection, the backend server performs a bidirectional friendship verification query (`checkFriendship`). If two users are not mutual friends with an `'accepted'` status, the message is blocked and an error notification is returned.
+
+---
+
+## 7. Skill System & Profile Tagging (Architecture & Usage)
+
+The free-text `bio` field has been fully deprecated and replaced by an admin-curated Skill Tagging system.
+
+### 1. Schema & Migration
+- **`skills` table**: Canonical list of pre-defined technical and collaborative skills.
+- **`profile_skills` join table**: Many-to-many relationship linking `public.profiles(id)` to `public.skills(id)` with cascade deletes and Row Level Security.
+
+```sql
+-- Create canonical skills table
+CREATE TABLE IF NOT EXISTS public.skills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Create profile_skills join table
+CREATE TABLE IF NOT EXISTS public.profile_skills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  profile_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  skill_id UUID NOT NULL REFERENCES public.skills(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT unique_profile_skill_pair UNIQUE(profile_id, skill_id)
+);
+
+-- Seed canonical skills (26 starter skills)
+INSERT INTO public.skills (name) VALUES
+  ('Python'), ('JavaScript'), ('Java'), ('C++'), ('React'), ('Node.js'), ('SQL'), ('HTML/CSS'),
+  ('Machine Learning'), ('Data Analysis'), ('Cybersecurity'), ('Cloud Computing (AWS/Azure)'),
+  ('Mobile App Development'), ('Game Development'), ('Robotics'), ('IoT'),
+  ('UI/UX Design'), ('Graphic Design'), ('Video Editing'), ('Photography'),
+  ('Content Writing'), ('Public Speaking'), ('Digital Marketing'),
+  ('Project Management'), ('Leadership'), ('Teamwork')
+ON CONFLICT (name) DO NOTHING;
+```
+
+### 2. Profile Skill Tag Editor (`ProfileView.jsx`)
+- Replaces the Academic Bio block in the Profile management view.
+- Renders the canonical list of skills as interactive toggle chips/pills.
+- **Instant Persistence**: Clicking a chip immediately inserts or deletes the corresponding record in `profile_skills` without requiring the user to click "Save Profile".
+
+### 3. Directory Integration & Match-Any Skill Filter (`DirectoryView.jsx`)
+- **Student Cards**: Renders selected skills as subordinate badges below academic metadata, with an overflow indicator (`+N more`) if many skills are selected. Cards with zero skills do not show an empty section.
+- **Multi-Select Skill Filter**: Renders a dedicated skill chip filter bar below the search input.
+- **Filtering Logic**:
+  - **Match-Any (OR)**: If multiple skill filters are selected, any student having **at least one** of the chosen skills is matched.
+  - **Combined with Search (AND)**: If a text query is entered, students must match the text search criteria **AND** the skill filter criteria.
+
 
 
 

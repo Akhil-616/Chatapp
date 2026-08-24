@@ -1,17 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { GENDER_OPTIONS, getCollegeFromEmail } from '../lib/collegeUtils';
-import { Loader2, Check, AlertCircle, User, AtSign, School, FileText, Lock, BookOpen, Layers } from 'lucide-react';
+import { STARTER_SKILLS } from '../lib/skillsData';
+import { Loader2, Check, AlertCircle, User, AtSign, School, Lock, BookOpen, Layers, Sparkles } from 'lucide-react';
 
 export default function ProfileView({ userProfile, email, onLogout, onProfileUpdate }) {
   const [fullName, setFullName] = useState(userProfile?.full_name || '');
-  const [bio, setBio] = useState(userProfile?.bio || '');
   const [gender, setGender] = useState(userProfile?.gender || '');
   const [section, setSection] = useState(userProfile?.section || '');
   const [faculty, setFaculty] = useState(userProfile?.faculty || '');
   
   // College is strictly derived from the verified email domain and is read-only
   const derivedCollege = userProfile?.college || getCollegeFromEmail(email || userProfile?.email);
+
+  // Skills state
+  const [allSkills, setAllSkills] = useState([]);
+  const [selectedSkillIds, setSelectedSkillIds] = useState([]);
+  const [selectedSkillNames, setSelectedSkillNames] = useState([]);
+  const [loadingSkills, setLoadingSkills] = useState(true);
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -26,6 +32,195 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
     return text.slice(0, 2).toUpperCase();
   };
 
+  // Load canonical skills and user's profile_skills
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadSkillsData() {
+      try {
+        setLoadingSkills(true);
+        const { data: authData } = await supabase.auth.getUser();
+        const currentUserId = authData?.user?.id || userProfile?.id;
+        const usernameKey = (userProfile?.username || 'user').toLowerCase();
+
+        // 1. Fetch canonical skills from DB
+        let canonicalList = [];
+        const { data: dbSkills, error: skillsErr } = await supabase
+          .from('skills')
+          .select('id, name')
+          .order('name');
+
+        if (!skillsErr && dbSkills && dbSkills.length > 0) {
+          canonicalList = dbSkills;
+        } else {
+          // Fallback to starter skills list
+          canonicalList = STARTER_SKILLS.map((name, idx) => ({
+            id: `seed-skill-${idx}`,
+            name,
+          }));
+        }
+
+        if (isMounted) {
+          setAllSkills(canonicalList);
+        }
+
+        // 2. Fetch user's profile_skills
+        const userSelectedIds = [];
+        const userSelectedNames = [];
+
+        if (currentUserId) {
+          try {
+            const { data: mySkills, error: mySkillsErr } = await supabase
+              .from('profile_skills')
+              .select('skill_id, skills(id, name)')
+              .eq('profile_id', currentUserId);
+
+            if (!mySkillsErr && mySkills) {
+              mySkills.forEach((item) => {
+                if (item.skill_id) userSelectedIds.push(item.skill_id);
+                if (item.skills?.name) userSelectedNames.push(item.skills.name);
+              });
+            }
+          } catch (e) {
+            console.debug('profile_skills query exception:', e);
+          }
+        }
+
+        // Check localStorage fallback for optimistic/offline sync
+        try {
+          const rawLocal = localStorage.getItem(`cj_user_skills_${usernameKey}`);
+          if (rawLocal) {
+            const parsed = JSON.parse(rawLocal);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((skillItem) => {
+                const name = typeof skillItem === 'string' ? skillItem : skillItem.name;
+                const id = typeof skillItem === 'string' ? null : skillItem.id;
+                if (name && !userSelectedNames.includes(name)) {
+                  userSelectedNames.push(name);
+                }
+                if (id && !userSelectedIds.includes(id)) {
+                  userSelectedIds.push(id);
+                }
+              });
+            }
+          }
+        } catch (e) {
+          console.debug('Error loading local skills:', e);
+        }
+
+        if (isMounted) {
+          setSelectedSkillIds(userSelectedIds);
+          setSelectedSkillNames(userSelectedNames);
+        }
+      } catch (err) {
+        console.error('Error loading skills:', err);
+      } finally {
+        if (isMounted) {
+          setLoadingSkills(false);
+        }
+      }
+    }
+
+    loadSkillsData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [userProfile?.id, userProfile?.username]);
+
+  // Instant toggle handler per click
+  const handleToggleSkill = async (skill) => {
+    const isSelected =
+      (skill.id && selectedSkillIds.includes(skill.id)) ||
+      selectedSkillNames.includes(skill.name);
+
+    const { data: authData } = await supabase.auth.getUser();
+    const currentUserId = authData?.user?.id || userProfile?.id;
+    const usernameKey = (userProfile?.username || 'user').toLowerCase();
+
+    // Optimistic UI updates
+    let nextIds = [...selectedSkillIds];
+    let nextNames = [...selectedSkillNames];
+
+    if (isSelected) {
+      nextIds = nextIds.filter((id) => id !== skill.id);
+      nextNames = nextNames.filter((name) => name !== skill.name);
+    } else {
+      if (skill.id && !nextIds.includes(skill.id)) nextIds.push(skill.id);
+      if (skill.name && !nextNames.includes(skill.name)) nextNames.push(skill.name);
+    }
+
+    setSelectedSkillIds(nextIds);
+    setSelectedSkillNames(nextNames);
+
+    // Save to local storage for instant sync across components & reloads
+    try {
+      localStorage.setItem(
+        `cj_user_skills_${usernameKey}`,
+        JSON.stringify(nextNames)
+      );
+    } catch (e) {
+      console.debug('Error caching user skills locally:', e);
+    }
+
+    // Persist to Supabase profile_skills table
+    if (currentUserId) {
+      try {
+        if (isSelected) {
+          // Remove row from profile_skills
+          if (skill.id && !skill.id.startsWith('seed-skill-')) {
+            await supabase
+              .from('profile_skills')
+              .delete()
+              .eq('profile_id', currentUserId)
+              .eq('skill_id', skill.id);
+          } else {
+            // Find DB skill id if skill was rendered from fallback
+            const { data: dbSkill } = await supabase
+              .from('skills')
+              .select('id')
+              .eq('name', skill.name)
+              .maybeSingle();
+
+            if (dbSkill?.id) {
+              await supabase
+                .from('profile_skills')
+                .delete()
+                .eq('profile_id', currentUserId)
+                .eq('skill_id', dbSkill.id);
+            }
+          }
+        } else {
+          // Insert row into profile_skills
+          let targetSkillId = skill.id;
+          if (!targetSkillId || targetSkillId.startsWith('seed-skill-')) {
+            // Find or resolve canonical skill row ID
+            const { data: dbSkill } = await supabase
+              .from('skills')
+              .select('id')
+              .eq('name', skill.name)
+              .maybeSingle();
+
+            if (dbSkill?.id) {
+              targetSkillId = dbSkill.id;
+            }
+          }
+
+          if (targetSkillId && !targetSkillId.startsWith('seed-skill-')) {
+            await supabase
+              .from('profile_skills')
+              .insert({
+                profile_id: currentUserId,
+                skill_id: targetSkillId,
+              });
+          }
+        }
+      } catch (dbErr) {
+        console.debug('profile_skills persistence note:', dbErr);
+      }
+    }
+  };
+
   const handleSaveProfile = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -34,7 +229,6 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
 
     try {
       const cleanFullName = fullName.trim() || null;
-      const cleanBio = bio.slice(0, 60).trim() || null;
       const cleanGender = gender.trim() || null;
       const cleanSection = section.trim() || null;
       const cleanFaculty = faculty.trim() || null;
@@ -48,7 +242,6 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
             gender: cleanGender,
             section: cleanSection,
             faculty: cleanFaculty,
-            bio: cleanBio,
           },
         });
       } catch (authMetaErr) {
@@ -69,13 +262,11 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
               gender: cleanGender,
               section: cleanSection,
               faculty: cleanFaculty,
-              bio: cleanBio,
             })
             .eq('id', currentUserId);
 
           if (dbErr) {
             console.debug('Direct full column update failed, attempting standard columns:', dbErr.message);
-            // Fallback for base columns if extended columns are not yet provisioned
             await supabase
               .from('profiles')
               .update({
@@ -96,7 +287,6 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
         gender: cleanGender || '',
         section: cleanSection || '',
         faculty: cleanFaculty || '',
-        bio: cleanBio || '',
       };
 
       if (typeof window !== 'undefined' && userProfile?.username) {
@@ -108,7 +298,6 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
             gender: cleanGender || '',
             section: cleanSection || '',
             faculty: cleanFaculty || '',
-            bio: cleanBio || '',
           })
         );
       }
@@ -135,7 +324,7 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
         <div className="mb-8">
           <h1 className="text-3xl font-['Space_Grotesk'] font-extrabold tracking-tight text-[#17140F]">Student Profile</h1>
           <p className="text-sm text-[#6B6355] mt-1">
-            Manage your academic identity, circle details, and public profile.
+            Manage your academic identity, circle details, and public skills.
           </p>
         </div>
 
@@ -176,7 +365,7 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
           )}
 
           {/* Edit Form */}
-          <form onSubmit={handleSaveProfile} className="space-y-4">
+          <form onSubmit={handleSaveProfile} className="space-y-5">
             {/* Full Name Field */}
             <div>
               <label className="block text-xs font-['Space_Grotesk'] font-bold text-[#17140F] mb-1.5 flex items-center space-x-1.5">
@@ -268,7 +457,7 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
               </div>
             </div>
 
-            {/* Gender Selection (Fixed Set: Male, Female, Other, Prefer not to say) */}
+            {/* Gender Selection */}
             <div>
               <label className="block text-xs font-['Space_Grotesk'] font-bold text-[#17140F] mb-1.5 flex items-center space-x-1.5">
                 <User className="w-3.5 h-3.5 text-[#1B6C5D]" />
@@ -288,31 +477,50 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
               </select>
             </div>
 
-            {/* Academic Bio with 60 character limit */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
+            {/* Skills Tag Editor (Replaces Academic Bio) */}
+            <div className="pt-1">
+              <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-['Space_Grotesk'] font-bold text-[#17140F] flex items-center space-x-1.5">
-                  <FileText className="w-3.5 h-3.5 text-[#1B6C5D]" />
-                  <span>Academic Bio</span>
+                  <Sparkles className="w-3.5 h-3.5 text-[#1B6C5D]" />
+                  <span>Skills & Expertise</span>
                 </label>
-                <span
-                  className={`text-[11px] font-['Space_Mono'] ${
-                    bio.length >= 60 ? 'text-red-600 font-bold' : 'text-[#8A8275]'
-                  }`}
-                >
-                  {bio.length}/60 letters
+                <span className="text-[11px] font-['Space_Mono'] text-[#8A8275]">
+                  {selectedSkillNames.length} selected • Click to toggle
                 </span>
               </div>
-              <textarea
-                rows={2}
-                maxLength={60}
-                value={bio}
-                onChange={(e) => setBio(e.target.value.slice(0, 60))}
-                placeholder="Add your bio (e.g. Computing student, Web dev enthusiast)..."
-                className="w-full bg-[#FAF6ED] border border-[rgba(23,20,15,0.14)] rounded-xl px-4 py-2.5 text-sm text-[#17140F] placeholder-[#8A8275] focus:outline-none focus:border-[#17140F] transition resize-none"
-              />
-              <p className="text-[11px] text-[#8A8275] mt-1">
-                Short bio visible to fellow students (strictly limited to 60 characters).
+
+              {loadingSkills && allSkills.length === 0 ? (
+                <div className="flex items-center space-x-2 py-4 text-xs text-[#6B6355]">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#1B6C5D]" />
+                  <span>Loading available skills...</span>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2 p-3.5 bg-[#FAF6ED] border border-[rgba(23,20,15,0.12)] rounded-2xl">
+                  {allSkills.map((skill) => {
+                    const isSelected =
+                      (skill.id && selectedSkillIds.includes(skill.id)) ||
+                      selectedSkillNames.includes(skill.name);
+
+                    return (
+                      <button
+                        key={skill.id || skill.name}
+                        type="button"
+                        onClick={() => handleToggleSkill(skill)}
+                        className={`text-xs font-['Space_Grotesk'] font-semibold px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none flex items-center space-x-1.5 ${
+                          isSelected
+                            ? 'bg-[#17140F] text-[#FFFCF5] border-[#17140F] shadow-xs'
+                            : 'bg-[#FFFCF5] text-[#6B6355] border-[rgba(23,20,15,0.14)] hover:border-[#17140F] hover:text-[#17140F]'
+                        }`}
+                      >
+                        <span>{skill.name}</span>
+                        {isSelected && <Check className="w-3 h-3 text-[#FFFCF5] stroke-[2.5]" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-[11px] text-[#8A8275] mt-1.5">
+                Select your technical and collaborative skills to be discovered in the student directory. Changes save instantly.
               </p>
             </div>
 
@@ -340,3 +548,4 @@ export default function ProfileView({ userProfile, email, onLogout, onProfileUpd
     </div>
   );
 }
+

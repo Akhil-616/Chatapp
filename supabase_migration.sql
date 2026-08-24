@@ -98,3 +98,80 @@ DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- ==========================================
+-- 5. SKILLS & PROFILE_SKILLS SCHEMA
+-- ==========================================
+
+-- 1. Create canonical skills table
+CREATE TABLE IF NOT EXISTS public.skills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Enable RLS on skills table (public read-only)
+ALTER TABLE public.skills ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public can view skills" ON public.skills;
+CREATE POLICY "Public can view skills"
+  ON public.skills FOR SELECT
+  USING (true);
+
+-- 2. Create profile_skills join table
+CREATE TABLE IF NOT EXISTS public.profile_skills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  profile_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  skill_id UUID NOT NULL REFERENCES public.skills(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT unique_profile_skill_pair UNIQUE(profile_id, skill_id)
+);
+
+-- Enable RLS on profile_skills
+ALTER TABLE public.profile_skills ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public can view profile_skills" ON public.profile_skills;
+CREATE POLICY "Public can view profile_skills"
+  ON public.profile_skills FOR SELECT
+  USING (true);
+
+DROP POLICY IF EXISTS "Users can insert own profile_skills" ON public.profile_skills;
+CREATE POLICY "Users can insert own profile_skills"
+  ON public.profile_skills FOR INSERT
+  WITH CHECK (auth.uid() = profile_id);
+
+DROP POLICY IF EXISTS "Users can delete own profile_skills" ON public.profile_skills;
+CREATE POLICY "Users can delete own profile_skills"
+  ON public.profile_skills FOR DELETE
+  USING (auth.uid() = profile_id);
+
+-- 3. Seed starter canonical skills
+INSERT INTO public.skills (name) VALUES
+  ('Python'),
+  ('JavaScript'),
+  ('Java'),
+  ('C++'),
+  ('React'),
+  ('Node.js'),
+  ('SQL'),
+  ('HTML/CSS'),
+  ('Machine Learning'),
+  ('Data Analysis'),
+  ('Cybersecurity'),
+  ('Cloud Computing (AWS/Azure)'),
+  ('Mobile App Development'),
+  ('Game Development'),
+  ('Robotics'),
+  ('IoT'),
+  ('UI/UX Design'),
+  ('Graphic Design'),
+  ('Video Editing'),
+  ('Photography'),
+  ('Content Writing'),
+  ('Public Speaking'),
+  ('Digital Marketing'),
+  ('Project Management'),
+  ('Leadership'),
+  ('Teamwork')
+ON CONFLICT (name) DO NOTHING;
+
