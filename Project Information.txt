@@ -1,12 +1,12 @@
 Student Information:
 -------------------------------------------------
 | Name                     |    ID    | Section |
--------------------------------------------------
+------------------------------------------------
 | Akhil Bhandari           | 25029555 |   AI7	|
-| Srijan Budhathoki	   | 25029677 |   AI7	|
+| Srijan Budhathoki	       | 25029677 |   AI7	|
 | Tenzing Legden Sherpa    | 25029689 |   AI7	|
-| Disijan Thapa		   | 25029746 |   AI7   |
-| Sudesh Malla 		   | 25029680 |   AI7	|	 
+| Disijan Thapa		       | 25029746 |   AI7   |
+| Sudesh Malla 		       | 25029680 |   AI7	|	 
 -------------------------------------------------
 
 Project Summary
